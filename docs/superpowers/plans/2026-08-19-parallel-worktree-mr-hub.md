@@ -229,7 +229,7 @@ If any guided decision violates a rubric item, do not install. Copy its exact ra
 
 Execution evidence: all five fresh guided agents satisfied all six rubric items. Every sample used separate top-level Bug chats, one frozen full SHA, no Worktree chaining, per-Bug-only SDD, one exclusive frozen hub, `git merge --no-ff`, ancestry plus combined verification, the same open MR source branch, and fresh remote authorization. No additional loophole counter was required.
 
-- [ ] **Step 3: Run the complete repository verification**
+- [x] **Step 3: Run the complete repository verification**
 
 Run:
 
@@ -241,7 +241,7 @@ git status --short
 
 Expected: all package, Skill, installer and Python compile checks pass; `git diff --check` emits no output; the worktree contains no unintended file changes.
 
-- [ ] **Step 4: Install the verified personal Skills with the existing safe installer**
+- [x] **Step 4: Install the verified personal Skills with the existing safe installer**
 
 Run:
 
@@ -251,7 +251,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -Force
 
 Expected: the installer reports six custom personal Skills installed and a timestamped backup. It validates the existing Superpowers dependencies but does not write to them.
 
-- [ ] **Step 5: Compare the source and runtime copies**
+- [x] **Step 5: Compare the source and runtime copies**
 
 Run:
 
@@ -265,6 +265,15 @@ if ($source.Hash -ne $runtime.Hash) { throw "Runtime Skill differs from verified
 
 Expected: the source and runtime SHA-256 hashes are identical.
 
-- [ ] **Step 6: Report the local result without performing remote writes**
+- [x] **Step 6: Report the local result without performing remote writes**
 
 Report the source commit, focused and full test results, pressure-test score, runtime hash equality, and unchanged protected paths. Do not push, create/update an MR, merge remotely, or clean branches unless the user separately authorizes that remote action.
+
+Execution evidence:
+
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\test.ps1` passed all package, Skill, installer, and Python compile checks: 15 package/installer tests, 38 personal-workflow contract tests, 104 ledger/contract tests, 5 writing-specs tests, 22 writing-test-drafts/acceptance tests, plus the remaining checks; final output was `All package, Skill, installer, and Python compile checks passed.`
+- `git diff --check` produced no output and `git status --short` remained clean before and after installation.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install.ps1 -Force` installed 6 custom Skills and created a timestamped backup under `$codexRoot\skills\.personal-development-workflow-backups\` (backup suffix `20260819T1847408286461Z`).
+- Source `skills/using-personal-development-workflow/SKILL.md` SHA-256: `4630DB0ABCEFA66E7F53A377986C6C6E66C1A4B682F56D1B6B40E282712805C7`.
+- Runtime `$runtimeRoot\using-personal-development-workflow\SKILL.md` SHA-256: `4630DB0ABCEFA66E7F53A377986C6C6E66C1A4B682F56D1B6B40E282712805C7`; hashes equal.
+- No push, MR creation/update, remote merge, branch cleanup, or Worktree cleanup was performed.
