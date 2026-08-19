@@ -14,7 +14,8 @@ $customSkills = @(
     "managing-change-ledger",
     "exploring-and-grilling-requirements",
     "writing-specs",
-    "writing-test-drafts"
+    "writing-test-drafts",
+    "writing-final-logic-drafts"
 )
 
 $requiredDependencies = @(

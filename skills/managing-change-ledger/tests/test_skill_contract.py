@@ -59,6 +59,15 @@ class ManagingChangeLedgerContractTests(unittest.TestCase):
             self.text,
         )
 
+    def test_completion_derives_the_final_logic_draft_from_change_ref(self):
+        for required in (
+            "`logic/<change_id>.md`",
+            "`## 功能逻辑`",
+            "最终 `change_ref`",
+            "不增加 `logic_ref`",
+        ):
+            self.assertIn(required, self.text)
+
     def test_runtime_commands_require_the_current_project_config(self):
         removed_user_default = "~/" + ".codex/personal-development-workflow/config.json"
         self.assertIn("当前项目配置", self.text)

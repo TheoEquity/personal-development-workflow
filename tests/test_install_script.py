@@ -13,6 +13,7 @@ CUSTOM_SKILLS = {
     "exploring-and-grilling-requirements",
     "writing-specs",
     "writing-test-drafts",
+    "writing-final-logic-drafts",
 }
 DEPENDENCIES = {
     "writing-plans",
@@ -66,7 +67,7 @@ class InstallerTests(unittest.TestCase):
             )
         return destination
 
-    def test_installs_exactly_the_five_custom_skills(self):
+    def test_installs_exactly_the_six_custom_skills(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             destination = self.create_destination_with_dependencies(
                 Path(temporary_directory)

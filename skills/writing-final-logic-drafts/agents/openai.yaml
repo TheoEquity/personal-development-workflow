@@ -1,0 +1,4 @@
+interface:
+  display_name: "编写最终逻辑稿"
+  short_description: "把验收通过后的真实功能整理成轻量运行逻辑说明"
+  default_prompt: "使用 $writing-final-logic-drafts 根据最终正式材料编写并确认当前变更的最终逻辑稿。"

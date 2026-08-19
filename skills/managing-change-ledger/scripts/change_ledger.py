@@ -663,6 +663,43 @@ def read_vault_blob(config: RuntimeConfig, field: str, value: str, change_id: st
         raise LedgerError(f"cannot read exact UTF-8 Vault blob: {detail.strip()}") from error
 
 
+def read_vault_path_at_commit(
+    config: RuntimeConfig,
+    sha: str,
+    relative_path: str,
+    document: str,
+) -> str:
+    if config.spec_vault is None:
+        raise LedgerError("spec_vault is required to read Vault documents")
+    normalized = relative_path.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if (
+        not normalized.endswith(".md")
+        or normalized.startswith("/")
+        or re.match(r"^[A-Za-z]:", normalized)
+        or ".." in path.parts
+    ):
+        raise LedgerError(f"{document} must use a safe Vault-relative Markdown path")
+    resolve_exact_commit(config.spec_vault, sha)
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(config.spec_vault), "show", f"{sha}:{normalized}"],
+            capture_output=True,
+            check=True,
+        )
+        return result.stdout.decode("utf-8")
+    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError) as error:
+        detail_bytes = getattr(error, "stderr", b"")
+        detail = (
+            detail_bytes.decode("utf-8", errors="replace")
+            if isinstance(detail_bytes, bytes)
+            else str(detail_bytes or error)
+        )
+        raise LedgerError(
+            f"cannot read {document} at {normalized}@{sha}: {detail.strip()}"
+        ) from error
+
+
 def strip_fenced_blocks(text: str) -> str:
     visible: list[str] = []
     fence: tuple[str, int] | None = None
@@ -724,6 +761,52 @@ def validate_change_document(text: str, change_id: str, *, final: bool) -> dict[
     if fields.get("status") != expected_status:
         raise LedgerError("change document status does not match its ledger lifecycle")
     return fields
+
+
+def validate_final_change_logic_link(text: str, change_id: str) -> None:
+    body = normalized_block(
+        single_section_body(text, "## 最终逻辑稿", "final change document")
+    )
+    expected = f"- logic/{change_id}.md"
+    if body != (expected,):
+        raise LedgerError(
+            "final change document 最终逻辑稿 must contain exactly " + expected
+        )
+
+
+def validate_final_logic_document(text: str, change_id: str) -> None:
+    visible = strip_fenced_blocks(text)
+    lines = visible.splitlines()
+    expected_h1 = f"# {change_id} 最终逻辑稿"
+    h1_headings = [
+        line.strip() for line in lines if re.fullmatch(r"#\s+.+", line.strip())
+    ]
+    if h1_headings != [expected_h1]:
+        raise LedgerError(
+            "final logic draft identity heading must be exactly " + expected_h1
+        )
+
+    h2_headings = [
+        line.strip() for line in lines if re.fullmatch(r"##\s+.+", line.strip())
+    ]
+    if h2_headings not in (["## 功能逻辑"], ["## 功能逻辑", "## 注意事项"]):
+        raise LedgerError(
+            "final logic draft must contain one ## 功能逻辑 and at most one later ## 注意事项"
+        )
+
+    function_logic = single_section_body(
+        visible,
+        "## 功能逻辑",
+        "final logic draft",
+    )
+    require_meaningful(function_logic, "final logic draft ## 功能逻辑")
+    if "## 注意事项" in h2_headings:
+        attention = single_section_body(
+            visible,
+            "## 注意事项",
+            "final logic draft",
+        )
+        require_meaningful(attention, "final logic draft ## 注意事项")
 
 
 def ordered_section_bodies(
@@ -1610,11 +1693,24 @@ def command_complete(args, config):
                     args.change_id,
                     final=True,
                 )
+                validate_final_change_logic_link(change_text, args.change_id)
                 for field in ("spec_ref", "plan_ref", "test_ref", "code_ref", "evidence_ref"):
                     if change_fields.get(field) != row[field]:
                         raise LedgerError(
                             f"final change document {field} does not exactly match the ledger"
                         )
+                _, final_change_sha = split_reference(
+                    args.change_ref,
+                    "vault-relative-path",
+                )
+                logic_path = f"logic/{args.change_id}.md"
+                logic_text = read_vault_path_at_commit(
+                    config,
+                    final_change_sha,
+                    logic_path,
+                    "final logic draft",
+                )
+                validate_final_logic_document(logic_text, args.change_id)
                 updated = connection.execute(
                     "UPDATE change_ledger SET change_ref=?,status='completed' "
                     "WHERE change_id=? AND status='in_progress' AND change_ref=?",

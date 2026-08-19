@@ -744,7 +744,35 @@ class LedgerTests(unittest.TestCase):
 
         self.assertIn("test_ref", result.stderr)
 
-    def _write_final_change(self, refs):
+    def _write_final_change(
+        self,
+        refs,
+        *,
+        include_logic=True,
+        link_logic=True,
+        logic_text=None,
+    ):
+        if include_logic:
+            (self.vault / "logic").mkdir(exist_ok=True)
+            (self.vault / "logic/CE-0001.md").write_text(
+                logic_text
+                or (
+                    "# CE-0001 最终逻辑稿\n\n"
+                    "## 功能逻辑\n\n"
+                    "用户创建批注后，系统沿用稳定批注 ID 查找现有映射，"
+                    "没有映射时创建唯一远端项，已有映射时更新原项。\n\n"
+                    "同步完成后，原批注进入已同步状态；重试继续复用同一映射，"
+                    "不会创建第二条记录。\n\n"
+                    "## 注意事项\n\n"
+                    "- 最终逻辑只描述已经通过验收的行为。\n"
+                ),
+                encoding="utf-8",
+            )
+        logic_section = (
+            "## 最终逻辑稿\n\n- logic/CE-0001.md\n\n"
+            if link_logic
+            else ""
+        )
         final_change = (
             "---\n"
             "change_id: CE-0001\n"
@@ -756,7 +784,8 @@ class LedgerTests(unittest.TestCase):
             f"evidence_ref: {refs['evidence_ref']}\n"
             "---\n"
             "# CE-0001 变更事件\n\n"
-            "## 最终结论\n\n- 已按最终材料完成。\n"
+            + logic_section
+            + "## 最终结论\n\n- 已按最终材料完成。\n"
         )
         (self.vault / "changes/CE-0001/change.md").write_text(final_change, encoding="utf-8")
         final_sha = self._commit(self.vault, "final-change")
@@ -855,6 +884,9 @@ class LedgerTests(unittest.TestCase):
         *,
         spec_ref=None,
         plan_ref=None,
+        include_logic=True,
+        link_logic=True,
+        logic_text=None,
     ):
         if evidence_ref is None:
             evidence_ref, material_sha = self.report_ref()
@@ -878,7 +910,12 @@ class LedgerTests(unittest.TestCase):
             "--value",
             refs["evidence_ref"],
         )
-        refs["change_ref"] = self._write_final_change(refs)
+        refs["change_ref"] = self._write_final_change(
+            refs,
+            include_logic=include_logic,
+            link_logic=link_logic,
+            logic_text=logic_text,
+        )
         return refs
 
     def set_evidence_prerequisites(self):
@@ -926,6 +963,88 @@ class LedgerTests(unittest.TestCase):
             )["status"],
         )
         self.assertEqual("completed", json.loads(self.cli("complete", "CE-0001").stdout)["status"])
+
+    def test_complete_rejects_final_commit_without_logic_draft_atomically(self):
+        self.create_change()
+        refs = self.set_completion_refs(include_logic=False)
+
+        result = self.cli(
+            "complete",
+            "CE-0001",
+            "--change-ref",
+            refs["change_ref"],
+            code=2,
+        )
+
+        self.assertIn("logic/CE-0001.md", result.stderr)
+        self.assertEqual(
+            "in_progress",
+            json.loads(self.cli("show", "CE-0001").stdout)["status"],
+        )
+
+    def test_complete_rejects_final_change_without_canonical_logic_link(self):
+        self.create_change()
+        refs = self.set_completion_refs(link_logic=False)
+
+        result = self.cli(
+            "complete",
+            "CE-0001",
+            "--change-ref",
+            refs["change_ref"],
+            code=2,
+        )
+
+        self.assertIn("最终逻辑稿", result.stderr)
+
+    def test_complete_rejects_invalid_final_logic_draft(self):
+        scenarios = (
+            (
+                "wrong-identity",
+                "# CE-9999 最终逻辑稿\n\n## 功能逻辑\n\n- 已完成。\n",
+                "identity",
+            ),
+            (
+                "empty-function-logic",
+                "# CE-0001 最终逻辑稿\n\n## 功能逻辑\n\n- TODO\n",
+                "功能逻辑",
+            ),
+            (
+                "duplicate-attention",
+                "# CE-0001 最终逻辑稿\n\n## 功能逻辑\n\n- 已完成。\n\n"
+                "## 注意事项\n\n- 第一项。\n\n## 注意事项\n\n- 第二项。\n",
+                "注意事项",
+            ),
+        )
+        for index, (label, logic_text, expected) in enumerate(scenarios):
+            with self.subTest(label=label):
+                if index:
+                    self.tearDown()
+                    self.setUp()
+                self.create_change()
+                refs = self.set_completion_refs(logic_text=logic_text)
+
+                result = self.cli(
+                    "complete",
+                    "CE-0001",
+                    "--change-ref",
+                    refs["change_ref"],
+                    code=2,
+                )
+
+                self.assertIn(expected, result.stderr)
+                self.assertEqual(
+                    "in_progress",
+                    json.loads(self.cli("show", "CE-0001").stdout)["status"],
+                )
+
+    def test_logic_draft_is_anchored_without_a_database_column(self):
+        with closing(sqlite3.connect(self.db)) as connection:
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(change_ledger)")
+            }
+
+        self.assertNotIn("logic_ref", columns)
 
     def test_complete_requires_bound_active_workflow_to_be_at_acceptance(self):
         refs = self.set_completion_refs_with_workflow()
@@ -1847,24 +1966,7 @@ class LedgerTests(unittest.TestCase):
             "--value",
             evidence_ref,
         )
-        final_text = (
-            "---\n"
-            "change_id: CE-0001\n"
-            "status: completed\n"
-            f"spec_ref: {refs['spec_ref']}\n"
-            f"plan_ref: {refs['plan_ref']}\n"
-            f"test_ref: {refs['test_ref']}\n"
-            f"code_ref: {refs['code_ref']}\n"
-            f"evidence_ref: {refs['evidence_ref']}\n"
-            "---\n"
-            "# CE-0001 变更事件\n"
-        )
-        (self.vault / "changes/CE-0001/change.md").write_text(
-            final_text,
-            encoding="utf-8",
-        )
-        final_sha = self._commit(self.vault, "final change")
-        final_ref = f"changes/CE-0001/change.md@{final_sha}"
+        final_ref = self._write_final_change(refs)
 
         payload = json.loads(
             self.cli(

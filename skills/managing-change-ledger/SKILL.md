@@ -26,7 +26,7 @@ description: Use when a requirement or bug must be registered, formal-material G
 | 代码 | 真实代码仓库 | `code_ref` |
 | 测试证据（验收报告） | Spec Vault Markdown + 本地 Git | `evidence_ref` |
 
-讨论稿不属于规划或实现输入，不写入总账。Plan 是经过评审后实际采用并落盘维护的正式材料；评审过程或评审回复本身不新增材料类型。不要创建 `code.md`；代码只用真实仓库提交定位。`workflow_state` 是运行游标，不是第七类正式材料，不进入 Spec Vault Git，也不替代任何正式引用。
+验收全部通过后还形成 `logic/<change_id>.md` 最终逻辑稿。它是完成版 `change.md` 的伴随文档，由最终 `change_ref` 的同一 Git commit SHA 锁定，不增加 `logic_ref`，也不改变上述六类总账引用。讨论稿不属于规划或实现输入，不写入总账。Plan 是经过评审后实际采用并落盘维护的正式材料；评审过程或评审回复本身不新增材料类型。不要创建 `code.md`；代码只用真实仓库提交定位。`workflow_state` 是运行游标，不是第七类正式材料，不进入 Spec Vault Git，也不替代任何正式引用。
 
 每个 `change_id` 只维护一份当前采用的正式 Plan 和一个 `plan_ref`；该 Plan 对应绑定该事件的个人工作流任务，并可在文档内部包含多个实现 `Task N`。实现 Task 不是总账身份，不产生独立的 `change_id`、`workflow_id` 或 `plan_ref`。分模块、并行执行、分别验证或逐 Task review 都仍属于同一事件。需要重新规划时，重新规划仍写入 `plans/<change_id>.md`，提交新版本并用新的完整 Git SHA 替换当前 `plan_ref`，不创建 Task 专属 Plan 路径。
 
@@ -38,6 +38,8 @@ description: Use when a requirement or bug must be registered, formal-material G
 - `test_ref`：`tests/<change_id>.md@<full-vault-commit-sha>`
 - `evidence_ref`：`acceptance/<change_id>/<run>.md@<full-vault-commit-sha>`
 - `code_ref`：`<repository>@<full-code-commit-sha>`
+
+最终逻辑稿没有独立数据库字段；完成后其派生定位固定为 `logic/<change_id>.md@<final-change-ref-sha>`。脚本从最终 `change_ref` 解析 SHA，再读取同一 commit tree 中的 canonical 文件。
 
 SHA 必须是 Git 返回的完整、精确 commit object ID（当前常见 SHA-1 为 40 位，SHA-256 仓库为 64 位）；即使 Git 可以解析，7 位或其他缩写也不是正式引用。只有内容已经包含在所引用的 Git commit 中，且路径符合字段角色时，引用才有效：Vault 引用的 commit 必须包含该 Markdown 的对应版本；代码引用的 commit 必须包含准备验收或已经验收的测试与生产代码。未提交工作区、暂存区、笼统的“当前代码”或仍指向旧内容的 `HEAD` 都不能充当正式引用。仓库存在无关的用户改动不自动使引用失效，但必须通过只读检查确认本次变更相关文件没有遗漏在该 commit 之外；无法证明时停止更新引用。
 
@@ -184,7 +186,7 @@ python <skill-directory>/scripts/change_ledger.py --config <config-path> workflo
 python <skill-directory>/scripts/change_ledger.py --config <config-path> next-id
 ```
 
-根据已知事实完成分类、Spec 处理和影响范围，生成 `changes/<change_id>/change.md`。随后同一身份机械决定 `specs/<change_id>.md`、`plans/<change_id>.md`、`tests/<change_id>.md` 和 `acceptance/<change_id>/<run>.md`。先在对话框完整展示拟落稿内容，用户确认后再保存和提交。
+根据已知事实完成分类、Spec 处理和影响范围，生成 `changes/<change_id>/change.md`。随后同一身份机械决定 `specs/<change_id>.md`、`plans/<change_id>.md`、`tests/<change_id>.md`、`acceptance/<change_id>/<run>.md` 和验收通过后使用的 `logic/<change_id>.md`。先在对话框完整展示拟落稿内容，用户确认后再保存和提交。
 
 ```markdown
 ---
@@ -260,7 +262,9 @@ python <skill-directory>/scripts/change_ledger.py --config <config-path> set-cod
 
 ### 完成变更
 
-这是 `change.md` 的第二次：事件完成。先基于 SQLite 中已经确定的五类当前材料引用生成最终文档，写入 `status: completed`、最终 `spec_ref`、`plan_ref`、`test_ref`、`code_ref`、`evidence_ref` 和最终结论，再提交取得最终 `change_ref`。
+这是 `change.md` 的第二次：事件完成。验收报告通过唯一 validator 后，先由 `writing-final-logic-drafts` 根据当前不可变 Spec、Plan、代码和验收事实形成 `logic/<change_id>.md`，完整展示并取得用户确认。逻辑稿必须使用精确 `# <change_id> 最终逻辑稿`、一个有具体内容的 `## 功能逻辑`，以及至多一个有具体内容的可选 `## 注意事项`；不得用一句空泛总结、代码导读或测试证据替代。
+
+逻辑稿确认后，基于 SQLite 中已经确定的五类当前材料引用生成最终 `change.md`，写入 `status: completed`、最终 `spec_ref`、`plan_ref`、`test_ref`、`code_ref`、`evidence_ref`、一个 `## 最终逻辑稿` 章节及唯一 `- logic/<change_id>.md`，以及最终结论。提交后的最终 `change_ref` 必须指向同时包含两份 canonical 文件的 commit tree。
 
 验收报告的唯一文本和可执行合同由 `writing-test-drafts` 定义，本 Skill 不复制其字段或 grammar。`complete` 再次调用同一个 validator，并以 `require_passed` 门检查所引用的测试稿、最终报告和当前总账期望绑定；只有其规范化结果为全部通过才继续。旧测试稿报告、空壳、无效状态和代码块伪字段均不能完成。
 
@@ -268,7 +272,7 @@ python <skill-directory>/scripts/change_ledger.py --config <config-path> set-cod
 
 该脚本只机械证明已提交报告、证据结构及引用绑定满足合同，不声称能从 Markdown 独立证明现实操作确已发生；实际执行义务仍由 `writing-test-drafts` 和可信 runner/controller 履行。
 
-最终 `change.md` frontmatter 把 `change_id`、`status: completed` 和 `spec_ref`、`plan_ref`、`test_ref`、`code_ref`、`evidence_ref` 写成总账的逐字值并提交；`change_ref` 由其自身的 canonical 路径与完整 commit SHA 机械证明，不能在同一次 Git 提交内容中自引用尚未产生的 commit SHA。对于 `in_progress` 事件，`complete` 必须接收这个最终 `change_ref`，从候选提交加载最终文档并校验身份与其余五类引用，然后在同一事务中同时写入最终 `change_ref` 和 `status=completed`。
+最终 `change.md` frontmatter 把 `change_id`、`status: completed` 和 `spec_ref`、`plan_ref`、`test_ref`、`code_ref`、`evidence_ref` 写成总账的逐字值并提交；`change_ref` 由其自身的 canonical 路径与完整 commit SHA 机械证明，不能在同一次 Git 提交内容中自引用尚未产生的 commit SHA。对于 `in_progress` 事件，`complete` 必须接收这个最终 `change_ref`，从候选提交加载最终文档并校验身份、其余五类引用和 canonical 逻辑稿，再在同一事务中同时写入最终 `change_ref` 和 `status=completed`。逻辑稿正文与路径不写入 SQLite；`complete` 只从最终提交派生并验证。
 
 完成前逐项检查：
 
@@ -279,7 +283,9 @@ python <skill-directory>/scripts/change_ledger.py --config <config-path> set-cod
 - 最终验收报告总体结论为“通过”，测试稿的每个关键步骤均有通过结果；
 - 验收报告通过 `writing-test-drafts` 唯一 validator 的期望绑定与 `require_passed` 校验；
 - Spec、Plan、代码基线、目标路径与适用 AGENTS 清单通过上述结构和绑定校验；
-- `change.md` 已更新为同一 `change_id`、`status: completed` 和与总账逐字一致的其余五类最终引用，并已提交；
+- `logic/<change_id>.md` 已由用户确认，含正确身份、具体的 `## 功能逻辑` 和至多一个可选 `## 注意事项`；
+- `change.md` 已更新为同一 `change_id`、`status: completed`、与总账逐字一致的其余五类最终引用，以及唯一的 canonical 最终逻辑稿路径；
+- 最终提交 tree 同时包含完成版 `change.md` 和该逻辑稿；SQLite 继续只有既有字段；
 - 最终候选 `change_ref` 指向该提交；完成事务成功前，总账仍保持登记版本；
 - 若存在绑定该事件的活动工作流，其 `current_stage` 必须已经是 `acceptance`；没有绑定工作流的普通总账事件可直接完成。
 
@@ -333,6 +339,8 @@ python <skill-directory>/scripts/change_ledger.py --config <config-path> list --
 | 普通代码 Bug 也频繁修改 Spec | 保留事件记录和发现时 Spec 引用，Spec 正文不改 |
 | Spec 功能缺陷只改代码 | 同时修改当前 Spec 并更新 `spec_ref` |
 | 用失败或旧验收报告完成事件 | 更新为同一 `code_ref` 的最终通过报告 |
+| 验收通过后直接完成，或把一句总结当逻辑稿 | 先用 `writing-final-logic-drafts` 形成并确认 `logic/<change_id>.md`，再让最终提交同时包含它和完成版 `change.md` |
+| 为最终逻辑稿新增数据库字段或阶段 | 从最终 `change_ref` 的 SHA 派生版本；不增加 `logic_ref` 或 SQLite 阶段 |
 | 用旧 `HEAD` 引用尚未提交的新材料或代码 | 先形成包含实际内容的本地 commit，再更新引用 |
 | 因仓库存在任意脏文件就阻塞 | 只读识别本次变更相关文件；无关用户改动保持不动 |
 | 在相关代码仍有未提交改动时开始正式验收 | 重新验证并形成新的本地代码 commit，再用其 SHA 验收 |
@@ -348,6 +356,7 @@ python <skill-directory>/scripts/change_ledger.py --config <config-path> list --
 - 正准备把工作流改绑到另一个事件，或在绑定事件未完成时关闭游标；
 - 正准备在登记与完成之间编辑 `change.md`，或用 `set-ref` 更新 `change_ref`；
 - 正准备在没有最终通过报告或 `code_ref` 不一致时标记完成；
+- 正准备在没有用户确认的 canonical 最终逻辑稿，或最终 `change_ref` 提交不包含该文件时标记完成；
 - 正准备改写已完成行、覆盖旧验收报告或把讨论稿作为规划、实现输入；
 - 正准备为当前 `in_progress` 事件的内部开发或验收失败创建新事件；
 - 无法证明某个引用的 Git SHA 真实存在。
@@ -355,6 +364,6 @@ python <skill-directory>/scripts/change_ledger.py --config <config-path> list --
 - 本次变更相关文件仍有未纳入 `code_ref` 的改动。
 ## 可靠性门禁
 
-脚本命令必须使用配置中的绝对 `spec_vault` 与位于 `spec_vault/.local` 的绝对数据库；该目录必须被 Vault 的 `.gitignore` 排除。除 `init` 外的查询对不存在数据库使用只读连接，不得创建文件。正式引用必须由 Git 证明完整 commit SHA 精确相等，Vault 引用还必须证明字段角色路径和 `commit:path` 存在，`code_ref` 必须指向可定位的代码仓库；`complete` 必须确认 final `change.md`、测试稿与最终报告结构完整且互相绑定，总体通过、没有失败或未执行。
+脚本命令必须使用配置中的绝对 `spec_vault` 与位于 `spec_vault/.local` 的绝对数据库；该目录必须被 Vault 的 `.gitignore` 排除。除 `init` 外的查询对不存在数据库使用只读连接，不得创建文件。正式引用必须由 Git 证明完整 commit SHA 精确相等，Vault 引用还必须证明字段角色路径和 `commit:path` 存在，`code_ref` 必须指向可定位的代码仓库；`complete` 必须确认 final `change.md`、canonical 最终逻辑稿、测试稿与最终报告结构完整且互相绑定，总体通过、没有失败或未执行。
 
 所有 read-check-write 操作都在 `BEGIN IMMEDIATE` 事务中，并以当前 `in_progress`、`active` 或 NULL 条件更新且检查影响行数。`adopt-plan` 把 Plan 引用和 `tdd_coding` 阶段作为一个不可分割写入且保持登记 `change_ref` 不变；`complete` 把最终 `change_ref` 与 `status=completed` 作为一个不可分割写入。数据库 CHECK 与终态 trigger 共同保护结构：未绑定游标只能位于 `requirement_discussion` 至 `register_change`；已绑定游标只能位于正式阶段；closed/completed 只能由规定命令产生且不可再改。迁移先预检冲突、未知阶段、孤儿外键和重复 active 绑定，再在同一事务中建立 canonical shadow tables、验证行数与 `foreign_key_check` 并原子替换；任一步失败都回滚。

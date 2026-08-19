@@ -13,6 +13,7 @@ EXPECTED_SKILLS = {
     "exploring-and-grilling-requirements",
     "writing-specs",
     "writing-test-drafts",
+    "writing-final-logic-drafts",
 }
 
 SUPERPOWERS_DEPENDENCIES = {
@@ -174,6 +175,8 @@ class PackageContractTests(unittest.TestCase):
             "是否开启 Subagent-Driven Development 进行开发？",
             "返工影响审查",
             "先改正式材料，再改代码",
+            "最终逻辑稿",
+            "logic/<change_id>.md",
         ):
             self.assertIn(required, text)
 

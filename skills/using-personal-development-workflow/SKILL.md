@@ -9,11 +9,11 @@ description: Use when the user explicitly opens, resumes, continues, closes, or 
 
 作为个人工作流的入口、状态监督器和阶段路由器。只判断当前阶段、展示状态并调用对应阶段 Skill；不替代阶段 Skill 编写 Spec、Plan、测试稿、代码或验收报告。
 
-总控负责请求、提供并跟踪 `change_id`：需求讨论确认后，它调用 `managing-change-ledger next-id` 取得唯一身份，并把同一值原样传给所有材料 Skill。正式材料固定使用 `changes/<change_id>/change.md`、`specs/<change_id>.md`、`plans/<change_id>.md`、`tests/<change_id>.md` 和 `acceptance/<change_id>/<run>.md`；版本继续由 `路径@完整 Git SHA` 定位。`managing-change-ledger` 是机械分配与持久化引擎，但不得替总控改变材料身份。
+总控负责请求、提供并跟踪 `change_id`：需求讨论确认后，它调用 `managing-change-ledger next-id` 取得唯一身份，并把同一值原样传给所有材料 Skill。正式项目 Markdown 固定使用 `changes/<change_id>/change.md`、`specs/<change_id>.md`、`plans/<change_id>.md`、`tests/<change_id>.md`、`acceptance/<change_id>/<run>.md` 和 `logic/<change_id>.md`；版本继续由 `路径@完整 Git SHA` 定位。最终逻辑稿不增加 SQLite 字段，它的 SHA 由最终 `change_ref` 的同一 Git commit 派生。`managing-change-ledger` 是机械分配与持久化引擎，但不得替总控改变材料身份。
 
 一份正式 Plan 对应一个个人工作流任务，也就是一个工作流游标绑定的一个变更事件；同一事件当前只维护一个 `plan_ref` 和一条 canonical Plan 路径。Plan 内部可以拆分为多个实现 `Task N`，每个 Task 可以分别执行 TDD、验证和独立 review，但它们共享该事件的 Spec、Plan、代码快照和完成边界。实现 Task 不是新的工作流或总账身份，不得为单个实现 Task 新建 Plan、工作流游标或变更事件。当前事件需要重新规划时，仍更新 `plans/<change_id>.md`，重新评审、提交，并用新的完整 Git SHA 更新 `plan_ref`；历史版本继续由同一路径的不同 SHA 区分。
 
-`change.md` 登记时创建一次、完成时更新一次。登记版固定记录背景、分类、影响范围、Spec 处理和确认结论；Spec、测试稿、Plan、代码与证据推进时，中间阶段只更新各自的 SQLite 引用，不修改 `change.md` 或 `change_ref`；完成版记录 `status: completed`、最终材料引用和最终结论。
+`change.md` 登记时创建一次、完成时更新一次。登记版固定记录背景、分类、影响范围、Spec 处理和确认结论；Spec、测试稿、Plan、代码与证据推进时，中间阶段只更新各自的 SQLite 引用，不修改 `change.md` 或 `change_ref`；完成版记录 `status: completed`、最终材料引用、`logic/<change_id>.md` 的 canonical 路径和最终结论。
 
 当前对话是否允许路由，只由用户最后一次明确的“开启/关闭个人工作流”指令决定。跨对话可恢复的当前阶段来自 SQLite 的 `workflow_state`；正式材料和事件完成状态来自 `change_ledger`、Spec Vault Git 引用和代码 Git 引用。入口必须读取游标并用正式材料校验，不能只靠对话记忆，也不能只看六类引用猜测精确阶段。一个 `in_progress` 事件覆盖开发、内部验收、修正和重新验收的完整 Loop；只有新需求或外部 Bug 反馈开启新的变更事件。
 
@@ -152,12 +152,19 @@ if command 是关闭:
    - 报告提交后，先调用 `writing-test-drafts` 的唯一 validator，并把当前事件、测试稿和代码引用作为期望绑定。validator 无效时停止；有效时只消费其规范化结果，再使用 `managing-change-ledger` 只更新 `evidence_ref`；登记版 `change_ref` 保持不变。
 
 9. **处理验收结果**
-    - validator 规范化结果为全部通过：按 `managing-change-ledger` 的完成门校验报告、测试稿、完整 Git SHA、六类引用和实际受测代码，然后进入步骤 10。
+    - validator 规范化结果为全部通过：先校验报告、测试稿、完整 Git SHA、六类引用和实际受测代码，然后进入步骤 10。
     - validator 规范化结果包含失败：原事件保持 `in_progress`，消费其已校验的失败回传，进入“开发与验收回环”。
     - validator 规范化结果没有失败但存在未执行：总体未完成；说明原因并停在步骤 8，不得进入步骤 10。
 
-10. **完成变更事件**
-   - 按 `managing-change-ledger` 的唯一完成合同形成并提交最终 `change.md`：同一 `change_id`、`status: completed`，以及与总账逐字一致的 `spec_ref`、`plan_ref`、`test_ref`、`code_ref`、`evidence_ref` 和最终结论。
+10. **形成并确认最终逻辑稿**
+   - **REQUIRED SUB-SKILL:** 使用 `writing-final-logic-drafts`，原样传入同一 `change_id`、当前不可变 `spec_ref`、`plan_ref`、`test_ref`、`code_ref` 和已经由唯一 validator 判定全部通过的 `evidence_ref`。
+   - 逻辑稿固定保存为 `logic/<change_id>.md`。候选稿和保存稿都使用精确 `# <change_id> 最终逻辑稿`、必填 `## 功能逻辑` 和可选 `## 注意事项`；内容按验收通过后的真实顺序讲清核心机制、触发、处理、结果及理解流程所需的层级、重复触发或清理行为，不写代码导读或测试证据，也不强制拆成多个固定栏目。
+   - 先在对话中完整展示候选稿并停止。用户确认后才保存 canonical 文件；未确认、材料冲突或无法从实际代码与验收事实证明正文时保持 `current_stage=acceptance`，不修改 `change.md`、SQLite 或代码，不完成事件。
+   - 保存后仍保持 `acceptance`，不增加 SQLite 阶段或 `logic_ref`。本步骤只把控制权交回总控；下一次继续时进入步骤 11。
+
+11. **完成变更事件**
+   - 按 `managing-change-ledger` 的唯一完成合同形成并提交最终 `change.md`：同一 `change_id`、`status: completed`，与总账逐字一致的 `spec_ref`、`plan_ref`、`test_ref`、`code_ref`、`evidence_ref`，正文中的 `## 最终逻辑稿` 及唯一 `- logic/<change_id>.md`，以及最终结论。
+   - 最终 `change_ref` 指向的同一 Git commit tree 必须同时包含 canonical 最终逻辑稿；其派生版本是 `logic/<change_id>.md@<final-sha>`，但不写入 SQLite 新字段。
    - 取得最终提交 SHA 后调用 `complete <change_id> --change-ref changes/<change_id>/change.md@<final-sha>`。只有脚本的材料角色、报告绑定、阶段和 Git 对象检查全部通过，命令才在一个事务内原子更新最终 `change_ref` 和 `status=completed`。
    - 总账完成后关闭该事件绑定的工作流游标，使其成为 `current_stage=completed`、`state=closed`。
    - 完成事件不授予集成权限。只有用户在完成事件后另行明确要求并授权其具体范围时，才可调用 `finishing-a-development-branch`。
@@ -169,7 +176,7 @@ if command 是关闭:
 
 ```text
 Spec 与测试稿 → Plan → TDD 编码 → 内部验收 → 独立验收报告
-                                             ├─ 通过 → 对齐引用 → 完成事件
+                                             ├─ 通过 → 对齐引用 → 最终逻辑稿 → 完成事件
                                              └─ 失败 → 失败回传 → 倒回对应阶段 → 再次验收
 ```
 
@@ -217,7 +224,7 @@ Spec 与测试稿 → Plan → TDD 编码 → 内部验收 → 独立验收报�
    - 确定责任阶段后，新流程分别把 `current_stage` 写为 `writing_spec`、`writing_plan`、`tdd_coding` 或 `acceptance`；`writing_test` 仅为已有游标兼容，游标允许回退，不创建新事件。
 4. 修改 Spec 或 Plan 时，把审查列出的位置原样传给对应写作 Skill；候选材料保存前以当前正式引用为基线检查 Git diff，保留审查范围外的规则、`impact_id`、兼容性结论和 `Task N`。审查范围外的大段删除、整份替换、Task 全部重建或无理由重编号必须拒绝。`结构性修改` 只在多个核心行为、整体实现路线或任务依赖图已经失效且局部补丁不足时成立，并在写入前取得用户明确确认。
 5. 修正后更新当前事件受影响的材料引用和 `code_ref`。Plan 有变化时必须重新保存、评审、提交并更新 `plan_ref`；不能因已经编码而跳过。原测试稿仍完整覆盖时复用；否则更新测试稿。每次实际验收都生成新报告，旧失败报告继续保留。
-6. 重复本 Loop，直到最新报告全部通过、六类引用有效且报告 `code_ref` 与总账一致，再进入主线步骤 10。
+6. 重复本 Loop，直到最新报告全部通过、六类引用有效且报告 `code_ref` 与总账一致，再进入主线步骤 10；逻辑稿确认后才进入步骤 11。
 
 内部失败不会产生新事件。新增行为、范围扩展或已完成事件之后的变化必须新建事件；当前开发/内部验收以外的外部 Bug 反馈也回到主线步骤 3 建立事件，不得借返工审查塞回旧事件。
 
@@ -234,6 +241,7 @@ Spec 与测试稿 → Plan → TDD 编码 → 内部验收 → 独立验收报�
 | 正式编码 | `test-driven-development`；按执行合同选择编排器 | 逐任务结构化 RED、GREEN、REFACTOR 证据，以及已授权 commit 或相关未提交代码 |
 | 完成声明前验证 | `verification-before-completion` | 当前代码版本的新鲜验证证据 |
 | 实际验收 | `writing-test-drafts` | 按既有测试稿生成独立验收报告和真实证据 |
+| 验收通过后的最终逻辑稿 | `writing-final-logic-drafts` | `logic/<change_id>.md` 的用户确认候选与 canonical 文件 |
 
 ## 识别当前游标与变更
 
@@ -291,7 +299,7 @@ python <managing-change-ledger>/scripts/change_ledger.py --config <config-path> 
 | `writing_plan` | 把 Spec 影响项传给原生 `writing-plans`，形成实现兼容性分析并取得独立 reviewer 的 `Approved`；由 `managing-change-ledger` 原子 `adopt-plan` 成功后进入 TDD 编码 |
 | `tdd_coding` | 正式 Plan 刚采纳时显示 SDD 专用门禁；明确“开启”后先 fetch Plan 指定的远程基线并核对最新完整 SHA，一致后才建立或确认隔离 worktree 并连续执行 SDD；漂移时回到材料、明确“不启动”或尚未选择时不产生执行副作用 |
 | `writing_test` | 仅兼容已有游标或旧回环；修正测试稿后进入验收，不作为新流程默认阶段 |
-| `acceptance` | 实际验收；失败时按失败回传改写为责任阶段，通过后完成事件 |
+| `acceptance` | 实际验收；失败时按失败回传改写为责任阶段，通过后先形成并确认最终逻辑稿，再完成事件；等待逻辑稿确认时仍保持本阶段 |
 | 外部 Bug 反馈且尚无确认结论 | 先进入需求讨论；结论确认后再登记新的变更事件并分类 |
 | `current_stage=completed` 且 `state=closed` | 已完成；绑定总账必须同时为 `completed`。保持停止，不自动 branch finishing；只有用户另行明确要求并授权才进入集成动作 |
 
@@ -318,7 +326,8 @@ python <managing-change-ledger>/scripts/change_ledger.py --config <config-path> 
 - 本次需要创建或修改行为契约：使用 `writing-specs`，并由其测试稿子节点形成或更新同一 `change_id` 的测试稿。
 - Spec 已确认且需要形成或维护正式 Plan：使用原生 `writing-plans`。
 - 用户要求实际验收：使用 `writing-test-drafts` 的执行模式读取步骤 4 已形成的测试稿；已有 `writing_test` 游标只按兼容路径处理。
-- 验收通过且引用满足完成条件：形成最终完成版 `change.md`，再使用 `managing-change-ledger` 完成事件。
+- 验收报告全部通过之后、完成变更事件之前：使用 `writing-final-logic-drafts` 形成并确认 `logic/<change_id>.md`；这不增加 SQLite 阶段或字段。
+- 最终逻辑稿已确认且引用满足完成条件：让最终 `change_ref` 的同一提交包含逻辑稿和完成版 `change.md`，再使用 `managing-change-ledger` 完成事件。
 
 从进入 Spec 后的规划与实现阶段开始，讨论稿不得作为输入；规划与实现只读取已确认 Spec、变更事件、已评审 Plan 和必要的当前代码事实。
 
@@ -390,5 +399,6 @@ python <managing-change-ledger>/scripts/change_ledger.py --config <config-path> 
 - 正准备用计划编写者的自检代替独立 reviewer，或把 reviewer 结果写入总账、六类正式材料或新的 SQLite 阶段；
 - 正准备为当前事件的 TDD、自测或内部验收失败创建新的 Bug 事件；
 - 正准备覆盖失败证据、跳过真实验收或完成不满足条件的事件。
+- 验收已经全部通过，但正准备跳过 `writing-final-logic-drafts`、用户确认或 `logic/<change_id>.md` 的最终提交锚定而直接完成事件。
 
 正确且符合预期的 RED 失败不属于停止信号或 blocker；它必须被记录后继续 GREEN。停止时只说明当前事实、阻塞原因和一个下一动作，不自行绕过。

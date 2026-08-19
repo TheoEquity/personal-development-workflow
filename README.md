@@ -2,7 +2,7 @@
 
 这是一个面向 Codex 的个人开发工作流包。它把需求确认、变更登记、Spec、测试稿、Plan、TDD 实现、验收和返工串成一条可恢复、可追踪的流程。
 
-本仓库只包含五个定制 Skill。Superpowers 原生 Skill 是外部只读依赖，本仓库不复制、不修改它们。
+本仓库只包含六个定制 Skill。Superpowers 原生 Skill 是外部只读依赖，本仓库不复制、不修改它们。
 
 ## 包含的 Skill
 
@@ -11,6 +11,7 @@
 - `exploring-and-grilling-requirements`：需求讨论与确认。
 - `writing-specs`：已确认行为契约和既有功能影响。
 - `writing-test-drafts`：验收测试稿、实际验收报告和失败回传。
+- `writing-final-logic-drafts`：验收通过后的轻量最终逻辑稿。
 
 外部依赖见 [DEPENDENCIES.md](DEPENDENCIES.md)。
 
@@ -36,7 +37,8 @@ flowchart TD
     K --> L["TDD + 多个 Task 实现和本地提交"]
     L --> M["从实际 worktree 写入 code_ref"]
     M --> N["按测试稿实际验收并生成独立报告"]
-    N -->|通过| O["写完成版 change.md 并完成事件"]
+    N -->|通过| O["形成并确认最终逻辑稿"]
+    O --> S["写完成版 change.md 并完成事件"]
     N -->|失败| P["返工影响审查"]
     P -->|材料无需修改| L
     P -->|Plan 需要修改| G
@@ -56,6 +58,7 @@ flowchart TD
 → 从该 SHA 建立 worktree + TDD + 实现与本地提交
 → code_ref
 → 实际验收与独立报告
+→ 形成并确认最终逻辑稿
 → 完成 change.md / 关闭事件与游标
 ```
 
@@ -69,16 +72,17 @@ specs/<change_id>.md
 plans/<change_id>.md
 tests/<change_id>.md
 acceptance/<change_id>/<run>.md
+logic/<change_id>.md
 ```
 
-版本不靠另建文件名区分，而由 `路径@完整 Git SHA` 定位。
+版本不靠另建文件名区分，而由 `路径@完整 Git SHA` 定位。最终逻辑稿不增加 SQLite 字段；它由最终 `change_ref` 的同一 Git commit SHA 锁定，派生定位为 `logic/<change_id>.md@<final-change-ref-sha>`。
 
 一个 Plan 对应一个工作流任务和一个变更事件；一个 Plan 内部可以拆成多个 Task。多个 Task 共享同一份 Spec、Plan、代码快照和完成边界，不为每个 Task 新建事件。
 
 `change.md` 只写两次：
 
 1. 事件登记时创建，记录背景、分类、影响范围、Spec 处理和确认结论。
-2. 事件完成时更新，记录 `status: completed`、最终材料引用和最终结论。
+2. 事件完成时更新，记录 `status: completed`、最终材料引用、`logic/<change_id>.md` 的 canonical 路径和最终结论。
 
 中间阶段只更新项目级 SQLite 中的当前材料引用，不持续重写 `change.md`。
 
@@ -99,6 +103,8 @@ Copy-Item examples/personal-development-workflow.json.example <project-root>/.co
 - `repositories`：稳定仓库名到实际非 bare Git checkout 的映射。
 
 真实项目配置、`.local/` 和 SQLite 不应提交到本仓库或业务仓库。
+
+SQLite 继续只保存既有六类材料引用和工作流游标，不增加 `logic_ref` 或新的工作流阶段。`complete` 从最终 `change_ref` 的 SHA 读取同一提交中的逻辑稿并机械验证。
 
 ## Plan 与实现门禁
 
@@ -126,6 +132,14 @@ fetch 后必须解析远程分支的最新完整 SHA。它与 Plan `base_sha` �
 
 这是一条由总控、执行代理和总账引用共同执行的工作流合同，不是操作系统级 Git hook。总账会阻止错误阶段写入 `code_ref`，但无法阻止用户绕开工作流直接运行原生 `git commit`；遵守本流程时不得用手工 Git 命令规避材料门禁。
 
+## 验收通过后的最终逻辑稿
+
+验收报告由唯一 validator 判定全部通过后，总控先调用 `writing-final-logic-drafts`，根据当前不可变 Spec、已评审 Plan、最终代码和验收事实形成 `logic/<change_id>.md`。候选稿必须完整展示并取得用户确认；等待确认期间仍停在 `acceptance`，不修改数据库阶段，也不完成事件。
+
+逻辑稿的正常粒度是：先讲核心机制，再按真实顺序讲用户触发、系统处理、页面或状态结果，以及理解流程所需的关键顺序、层级、重复触发或清理行为。文档使用必填的 `## 功能逻辑` 和可选的 `## 注意事项`；不写函数、文件清单、逐项测试证据，也不强制拆成多个固定栏目。
+
+完成时，最终 `change.md` 的 `## 最终逻辑稿` 章节只记录 `- logic/<change_id>.md`。最终 `change_ref` 指向的同一 commit tree 必须同时包含这两份文件；缺失、空壳、身份错误或路径不一致时，`complete` 保持事件为 `in_progress`。
+
 ## 安装
 
 先确保 [DEPENDENCIES.md](DEPENDENCIES.md) 中的外部 Superpowers Skill 已安装，然后在仓库根目录运行：
@@ -152,7 +166,7 @@ pwsh -NoProfile -File scripts/install.ps1 -DestinationRoot '<absolute-skill-root
 pwsh -NoProfile -File scripts/test.ps1
 ```
 
-测试覆盖包边界、安装安全、五个 Skill 的合同与脚本、Python 编译，以及发布副本的路径可移植性。
+测试覆盖包边界、安装安全、六个 Skill 的合同与脚本、Python 编译，以及发布副本的路径可移植性。
 
 ## 安全边界
 

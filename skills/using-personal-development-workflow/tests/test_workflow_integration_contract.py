@@ -70,6 +70,21 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         self.assertIn("`status: completed`", self.text)
         self.assertIn("`spec_ref`、`plan_ref`、`test_ref`、`code_ref`、`evidence_ref`", self.text)
 
+    def test_passed_acceptance_writes_final_logic_before_completion(self):
+        for required in (
+            "`writing-final-logic-drafts`",
+            "`logic/<change_id>.md`",
+            "`## 功能逻辑`",
+            "验收报告全部通过之后",
+            "完成变更事件之前",
+            "不增加 SQLite 阶段",
+        ):
+            self.assertIn(required, self.text)
+
+        writer = self.text.index("`writing-final-logic-drafts`")
+        completion = self.text.index("**完成变更事件**")
+        self.assertLess(writer, completion)
+
     def test_impact_range_definition_is_not_duplicated(self):
         self.assertIn("`writing-specs` 是“可能的影响范围”的唯一规范源", self.text)
         self.assertNotIn("`可能修改 / 可能新增 / 需要核对`", self.text)
