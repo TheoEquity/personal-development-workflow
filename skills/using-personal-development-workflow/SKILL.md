@@ -1,6 +1,6 @@
 ---
 name: using-personal-development-workflow
-description: Use when the user explicitly opens, resumes, continues, closes, or asks for the current status of their personal development workflow in the same conversation.
+description: Use when the user explicitly opens, resumes, continues, closes, or asks for the current status of their personal development workflow, or coordinates parallel Bug chats and Worktrees into one MR.
 ---
 
 # 使用个人开发工作流
@@ -227,6 +227,29 @@ Spec 与测试稿 → Plan → TDD 编码 → 内部验收 → 独立验收报�
 6. 重复本 Loop，直到最新报告全部通过、六类引用有效且报告 `code_ref` 与总账一致，再进入主线步骤 10；逻辑稿确认后才进入步骤 11。
 
 内部失败不会产生新事件。新增行为、范围扩展或已完成事件之后的变化必须新建事件；当前开发/内部验收以外的外部 Bug 反馈也回到主线步骤 3 建立事件，不得借返工审查塞回旧事件。
+
+### 跨 Bug 并行与持续 MR 集线
+
+当用户要并行修复多个 Bug，或把后续 Bug 继续追加到同一个开放 MR 时，按以下拓扑协调；不把这条跨事件流程塞进任一单独 Bug 的 Plan。
+
+#### Bug 会话与共同基线
+
+1. 跨 Bug 并行使用不同的 Codex 顶层会话和不同的 Git Worktree。每个 Bug 独立开启或恢复个人工作流，并使用自己的 `change_id`、`workflow_id`、Spec、Plan、分支和 `code_ref`；一个 Bug 事件完成后仍保持不可变。
+2. 一轮开始前只解析一次共同基线。第一轮使用目标远程分支最新的 40 位完整 SHA；已有开放 MR 时，使用该 MR 实际源分支头的 40 位完整 SHA。把它原样写入本轮每个 Bug Plan 的 `base_sha`，同一轮所有 Bug 的 `base_sha` 必须逐字相同。
+3. 每个 Bug Worktree 都从该冻结 SHA 创建并验证。不得把另一个 Bug Worktree 的目录状态或可变 HEAD 作为基线，也不得因为先完成一个 Bug 就让同轮其他 Bug 改为链式基线。
+4. 跨 Bug 并行不得由 `subagent-driven-development` 的 Subagent 代替；单个 Bug 会话仍逐字显示既有 SDD 门禁，SDD 授权只覆盖当前 Bug 的 Plan。
+5. 每个 Bug 会话独立完成 TDD、验收和事件关闭，只向集线会话交付用户明确指定的 `change_id`、本地分支、完整 commit SHA、`code_ref` 和验证结论；Bug 会话不自行创建另一个最终 MR。
+
+#### 集线会话与同一开放 MR
+
+1. 一个开放 MR 只由一个长期集线会话独占其源分支和 Worktree。新集线会话接手前必须先交接或释放旧 Worktree；同一源分支不能同时签出在两个 Worktree。
+2. 集线会话从实际 Git 和 MR 状态恢复源分支、目标分支和完整头 SHA，只接收用户明确指定且工作流已经完成的 Bug 分支。本轮开始后冻结集线分支，成员开发期间不得移动或 push；下一轮以更新后的源分支头建立新的冻结基线。
+3. 合入前核对输入 commit 与事件 `code_ref`；默认使用 `git merge --no-ff` 保留提交身份。合入后机械验证每个 Bug `code_ref` 的 commit 都是集线头的祖先，再运行组合验证。
+4. 干净合并且组合验证通过后才显示远程动作范围。用户明确授权更新后 push 同一源分支，让原开放 MR 更新，不得新建重复 MR。MR 已合并或关闭时，才从最新目标分支建立新的集线分支，并另行取得 push 与新建 MR 授权。
+5. 机械冲突先展示精确冲突范围，取得授权后才能处理；冲突涉及行为、兼容性判断或组合验证失败时，基于当前集线状态登记新的修复事件，先改 Spec/Plan 再改代码，已完成事件不回写。
+6. 集线状态由实际 Git 分支、完整 SHA、祖先关系和 MR 状态恢复，不新增 SQLite 表、字段、阶段或正式材料引用。Superpowers 原生 Skill 保持只读。
+
+Bug 会话的本地编码/commit 授权、事件完成、旧会话授权、SQLite 状态、现存分支和开放 MR 都不授权集线 merge、push、创建/更新 MR、远端合并或清理；每个动作继续服从当前会话的执行合同与 finishing 门禁。
 
 ### 阶段与 Skill 对应
 

@@ -370,6 +370,44 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         self.assertIn("测试稿不因影响表自动扩展回归项", self.text)
         self.assertIn("不修改 `writing-test-drafts`", self.text)
 
+    def test_parallel_bug_chats_share_one_frozen_git_baseline(self):
+        self.assertIn("### 跨 Bug 并行与持续 MR 集线", self.text)
+        section_start = self.text.index("### 跨 Bug 并行与持续 MR 集线")
+        section_end = self.text.index("### 阶段与 Skill 对应", section_start)
+        section = self.text[section_start:section_end]
+
+        for required in (
+            "不同的 Codex 顶层会话和不同的 Git Worktree",
+            "自己的 `change_id`、`workflow_id`、Spec、Plan、分支和 `code_ref`",
+            "同一轮所有 Bug 的 `base_sha` 必须逐字相同",
+            "不得把另一个 Bug Worktree 的目录状态或可变 HEAD 作为基线",
+            "MR 实际源分支头的 40 位完整 SHA",
+            "本轮开始后冻结集线分支",
+            "跨 Bug 并行不得由 `subagent-driven-development` 的 Subagent 代替",
+            "SDD 授权只覆盖当前 Bug 的 Plan",
+        ):
+            self.assertIn(required, section)
+
+    def test_one_hub_chat_updates_the_same_open_mr(self):
+        self.assertIn("### 跨 Bug 并行与持续 MR 集线", self.text)
+        section_start = self.text.index("### 跨 Bug 并行与持续 MR 集线")
+        section_end = self.text.index("### 阶段与 Skill 对应", section_start)
+        section = self.text[section_start:section_end]
+
+        for required in (
+            "一个开放 MR 只由一个长期集线会话独占其源分支和 Worktree",
+            "工作流已经完成的 Bug 分支",
+            "git merge --no-ff",
+            "每个 Bug `code_ref` 的 commit 都是集线头的祖先",
+            "组合验证",
+            "push 同一源分支",
+            "不得新建重复 MR",
+            "MR 已合并或关闭",
+            "不新增 SQLite 表、字段、阶段或正式材料引用",
+            "Superpowers 原生 Skill 保持只读",
+        ):
+            self.assertIn(required, section)
+
 
 if __name__ == "__main__":
     unittest.main()
