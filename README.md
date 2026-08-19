@@ -23,13 +23,16 @@ flowchart TD
     C --> D["创建登记版 change.md"]
     D --> E["编写并确认 Spec"]
     E --> F["生成或确认测试稿"]
-    F --> G["编写 Plan"]
+    F --> G["编写 Plan 并记录远程基线"]
     G --> H["独立 reviewer 审查"]
     H -->|Issues Found| G
     H -->|Approved| I["adopt-plan 安装 plan_ref"]
     I --> J{"是否开启 Subagent-Driven Development 进行开发？"}
-    J -->|开启| K["创建或确认隔离 worktree"]
+    J -->|开启| Q["fetch Plan 指定远程分支"]
     J -->|不启动| J
+    Q --> R{"最新完整 SHA 等于 Plan base_sha？"}
+    R -->|否| G
+    R -->|是| K["从该 SHA 创建或确认隔离 worktree"]
     K --> L["TDD + 多个 Task 实现和本地提交"]
     L --> M["从实际 worktree 写入 code_ref"]
     M --> N["按测试稿实际验收并生成独立报告"]
@@ -49,7 +52,8 @@ flowchart TD
 → 编写并确认 Spec / 生成测试稿
 → 编写、独立评审并采用 Plan
 → 询问是否开启 SDD
-→ worktree + TDD + 实现与本地提交
+→ fetch Plan 指定远程分支并核对最新完整 SHA
+→ 从该 SHA 建立 worktree + TDD + 实现与本地提交
 → code_ref
 → 实际验收与独立报告
 → 完成 change.md / 关闭事件与游标
@@ -98,13 +102,15 @@ Copy-Item examples/personal-development-workflow.json.example <project-root>/.co
 
 ## Plan 与实现门禁
 
-Spec 和测试稿就绪后，使用外部原生 `writing-plans` 形成 Plan。Plan 必须经过独立 reviewer，并由 `managing-change-ledger adopt-plan` 原子安装新的 `plan_ref`；只有采用成功后才进入 `tdd_coding`。
+Spec 和测试稿就绪后，使用外部原生 `writing-plans` 形成 Plan。Plan 必须记录 `base_remote`、`base_branch` 和评审代码所用的 40 位完整 `base_sha`，经过独立 reviewer，并由 `managing-change-ledger adopt-plan` 原子安装新的 `plan_ref`；只有采用成功后才进入 `tdd_coding`。
 
 进入编码前，总控必须逐字询问：
 
 > 是否开启 Subagent-Driven Development 进行开发？
 
-只有当前对话中的明确肯定才授权创建或进入隔离 worktree、按当前 Plan 编码，并在该范围创建本地 commits。该授权不包含 push、PR、merge、清理或 branch finishing。
+只有当前对话中的明确肯定才授权先 fetch Plan 指定的远程基线分支、创建或进入隔离 worktree、按当前 Plan 编码，并在该范围创建本地 commits。fetch 只更新本地 remote-tracking ref，不会对远程写入，也不会 pull、merge 或 reset 主 checkout。
+
+fetch 后必须解析远程分支的最新完整 SHA。它与 Plan `base_sha` 一致时，才从该 SHA 创建或确认 worktree；不一致时立即关闭代码门，只审查这段远程差异，最小更新并重新评审 Plan。fetch 失败或材料重新采用前，不得创建开发 worktree、写 RED/测试/代码或创建本地 commit。该授权始终不包含 push、PR、merge、清理或 branch finishing。
 
 ## 验收失败与返工
 

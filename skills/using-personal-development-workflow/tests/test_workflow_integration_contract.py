@@ -188,6 +188,52 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         ):
             self.assertIn(required, self.text)
 
+    def test_plan_records_the_reviewed_remote_baseline(self):
+        for required in (
+            "`base_remote`",
+            "`base_branch`",
+            "`base_sha`",
+            "40 位完整 Git commit SHA",
+            "Plan reviewer",
+        ):
+            self.assertIn(required, self.text)
+
+    def test_sdd_fetches_and_resolves_the_plan_branch_before_worktree(self):
+        self.assertIn("#### 开发前远程基线门禁", self.text)
+        gate_start = self.text.index("#### 开发前远程基线门禁")
+        gate_end = self.text.index("####", gate_start + 5)
+        gate = self.text[gate_start:gate_end]
+
+        for required in (
+            "第一项动作",
+            "git fetch --no-tags <base_remote> +refs/heads/<base_branch>:refs/remotes/<base_remote>/<base_branch>",
+            "<base_remote>/<base_branch>^{commit}",
+            "最新完整 SHA",
+            "`using-git-worktrees`",
+        ):
+            self.assertIn(required, gate)
+        self.assertLess(gate.index("git fetch"), gate.index("`using-git-worktrees`"))
+
+    def test_remote_baseline_drift_closes_code_until_plan_readoption(self):
+        for required in (
+            "不得创建或复用开发 worktree",
+            "不得写 RED、测试或生产代码",
+            "不得创建本地 commit",
+            "只审查这段远程差异",
+            "重新评审、提交并由 `adopt-plan` 采用",
+            "不对主 checkout 执行 `git pull`、merge 或 reset",
+        ):
+            self.assertIn(required, self.text)
+
+    def test_sdd_authorization_covers_only_the_scoped_local_fetch(self):
+        for required in (
+            "第四件本地前置动作",
+            "Plan 显示的 `base_remote` 与 `base_branch`",
+            "只更新本地 remote-tracking ref",
+            "不授权任何远程写入",
+        ):
+            self.assertIn(required, self.execution_contract_text)
+
     def test_sdd_handoff_authorizes_only_the_displayed_local_scope(self):
         for required in (
             "当前 `plan_ref`",
