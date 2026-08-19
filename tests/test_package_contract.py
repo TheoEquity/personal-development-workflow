@@ -71,14 +71,17 @@ class PackageContractTests(unittest.TestCase):
         self.assertEqual(violations, [])
 
     def test_text_payload_has_no_machine_paths_or_credentials(self):
-        forbidden_fragments = (
-            "C:" + "\\Users",
-            "D:" + "\\CodexData",
-            "599" + "07",
+        machine_path_pattern = re.compile(
+            r"(?<![A-Za-z0-9])[A-Za-z]:\\[^\s'\"`<>]+"
         )
-        credential_pattern = re.compile(
-            r"(?:gho|ghp|github_pat)_[A-Za-z0-9_]{8,}|"
-            r"-----BEGIN (?:RSA |OPENSSH )?PRIVATE KEY-----"
+        credential_patterns = (
+            re.compile(r"(?:gho|ghp|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,}"),
+            re.compile(r"glpat-[A-Za-z0-9_-]{16,}"),
+            re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}"),
+            re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
+            re.compile(r"AKIA[0-9A-Z]{16}"),
+            re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----"),
+            re.compile(r"https?://[^\s/:]+:[^\s/@]+@[^\s]+"),
         )
         violations = []
         for path in REPO_ROOT.rglob("*"):
@@ -88,10 +91,62 @@ class PackageContractTests(unittest.TestCase):
                 text = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 continue
-            if any(fragment in text for fragment in forbidden_fragments):
+            if machine_path_pattern.search(text):
                 violations.append(f"machine-path:{path.relative_to(REPO_ROOT).as_posix()}")
-            if credential_pattern.search(text):
+            if any(pattern.search(text) for pattern in credential_patterns):
                 violations.append(f"credential:{path.relative_to(REPO_ROOT).as_posix()}")
+        self.assertEqual(violations, [])
+
+    def test_reachable_git_history_has_no_sensitive_payloads(self):
+        machine_path_pattern = re.compile(
+            r"(?<![A-Za-z0-9])[A-Za-z]:\\[^\s'\"`<>]+"
+        )
+        credential_patterns = (
+            re.compile(r"(?:gho|ghp|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{8,}"),
+            re.compile(r"glpat-[A-Za-z0-9_-]{16,}"),
+            re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}"),
+            re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"),
+            re.compile(r"AKIA[0-9A-Z]{16}"),
+            re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----"),
+            re.compile(r"https?://[^\s/:]+:[^\s/@]+@[^\s]+"),
+        )
+        forbidden_parts = {"__pycache__", ".local"}
+        violations = []
+        objects = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-list", "--objects", "--all"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        for entry in objects:
+            object_id, separator, object_path = entry.partition(" ")
+            if not separator:
+                continue
+            path = Path(object_path)
+            if (
+                any(part in forbidden_parts for part in path.parts)
+                or path.name == "personal-development-workflow.json"
+                or path.suffix in {".pyc", ".sqlite", ".sqlite3"}
+            ):
+                violations.append(f"forbidden-history-path:{object_path}")
+                continue
+            object_type = subprocess.run(
+                ["git", "-C", str(REPO_ROOT), "cat-file", "-t", object_id],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            if object_type != "blob":
+                continue
+            blob = subprocess.run(
+                ["git", "-C", str(REPO_ROOT), "cat-file", "blob", object_id],
+                check=True,
+                capture_output=True,
+            ).stdout.decode("utf-8", errors="ignore")
+            if machine_path_pattern.search(blob):
+                violations.append(f"machine-path-history:{object_path}")
+            if any(pattern.search(blob) for pattern in credential_patterns):
+                violations.append(f"credential-history:{object_path}")
         self.assertEqual(violations, [])
 
     def test_superpowers_sources_are_dependencies_not_vendored_skills(self):
@@ -102,6 +157,8 @@ class PackageContractTests(unittest.TestCase):
             self.assertFalse((SKILLS_ROOT / dependency).exists())
         self.assertIn("只读依赖", text)
         self.assertIn("不复制", text)
+        self.assertIn("superpowers@openai-curated-remote", text)
+        self.assertIn("frontmatter", text)
 
     def test_readme_documents_the_complete_workflow_contract(self):
         self.assertTrue((REPO_ROOT / "README.md").is_file())
@@ -143,6 +200,11 @@ class PackageContractTests(unittest.TestCase):
         self.assertIn("<absolute-project-spec-vault-path>", text)
         self.assertIn("<absolute-code-repository-path>", text)
         self.assertNotRegex(text, r"[A-Za-z]:\\")
+
+    def test_documentation_has_no_literal_windows_absolute_paths(self):
+        for relative in ("README.md", "DEPENDENCIES.md"):
+            text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+            self.assertNotRegex(text, r"[A-Za-z]:\\", relative)
 
 
 if __name__ == "__main__":
