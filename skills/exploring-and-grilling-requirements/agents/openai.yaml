@@ -1,0 +1,4 @@
+interface:
+  display_name: "发散并拷打需求"
+  short_description: "查明可查事实后发散需求方案，再逐个问透关键决策并收敛确认结论"
+  default_prompt: "使用 $exploring-and-grilling-requirements 先查明可查事实，再发散这个需求，并逐个问透关键决策。"

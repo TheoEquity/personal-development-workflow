@@ -1,0 +1,149 @@
+from pathlib import Path
+import re
+import subprocess
+import unittest
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SKILLS_ROOT = REPO_ROOT / "skills"
+
+EXPECTED_SKILLS = {
+    "using-personal-development-workflow",
+    "managing-change-ledger",
+    "exploring-and-grilling-requirements",
+    "writing-specs",
+    "writing-test-drafts",
+}
+
+SUPERPOWERS_DEPENDENCIES = {
+    "writing-plans",
+    "using-git-worktrees",
+    "subagent-driven-development",
+    "executing-plans",
+    "test-driven-development",
+    "verification-before-completion",
+    "finishing-a-development-branch",
+}
+
+REQUIRED_PATHS = {
+    "README.md",
+    "DEPENDENCIES.md",
+    "examples/personal-development-workflow.json.example",
+    "scripts/install.ps1",
+    "scripts/test.ps1",
+    ".github/workflows/tests.yml",
+}
+
+
+class PackageContractTests(unittest.TestCase):
+    def test_package_contains_exactly_the_owned_skills(self):
+        self.assertTrue(SKILLS_ROOT.is_dir(), SKILLS_ROOT)
+        actual = {path.name for path in SKILLS_ROOT.iterdir() if path.is_dir()}
+        self.assertEqual(actual, EXPECTED_SKILLS)
+        for skill_name in EXPECTED_SKILLS:
+            self.assertTrue((SKILLS_ROOT / skill_name / "SKILL.md").is_file())
+
+    def test_required_distribution_files_exist(self):
+        missing = [path for path in REQUIRED_PATHS if not (REPO_ROOT / path).is_file()]
+        self.assertEqual(missing, [])
+
+    def test_runtime_payload_excludes_local_state_and_caches(self):
+        forbidden_names = {
+            "__pycache__",
+            ".local",
+            "personal-workflow.sqlite3",
+            "personal-development-workflow.json",
+        }
+        tracked = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        violations = []
+        for relative in tracked:
+            path = Path(relative)
+            if (
+                any(part in forbidden_names for part in path.parts)
+                or path.suffix in {".pyc", ".sqlite", ".sqlite3"}
+            ):
+                violations.append(path.as_posix())
+        self.assertEqual(violations, [])
+
+    def test_text_payload_has_no_machine_paths_or_credentials(self):
+        forbidden_fragments = (
+            "C:" + "\\Users",
+            "D:" + "\\CodexData",
+            "599" + "07",
+        )
+        credential_pattern = re.compile(
+            r"(?:gho|ghp|github_pat)_[A-Za-z0-9_]{8,}|"
+            r"-----BEGIN (?:RSA |OPENSSH )?PRIVATE KEY-----"
+        )
+        violations = []
+        for path in REPO_ROOT.rglob("*"):
+            if not path.is_file() or ".git" in path.parts:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            if any(fragment in text for fragment in forbidden_fragments):
+                violations.append(f"machine-path:{path.relative_to(REPO_ROOT).as_posix()}")
+            if credential_pattern.search(text):
+                violations.append(f"credential:{path.relative_to(REPO_ROOT).as_posix()}")
+        self.assertEqual(violations, [])
+
+    def test_superpowers_sources_are_dependencies_not_vendored_skills(self):
+        self.assertTrue((REPO_ROOT / "DEPENDENCIES.md").is_file())
+        text = (REPO_ROOT / "DEPENDENCIES.md").read_text(encoding="utf-8")
+        for dependency in SUPERPOWERS_DEPENDENCIES:
+            self.assertIn(f"`{dependency}`", text)
+            self.assertFalse((SKILLS_ROOT / dependency).exists())
+        self.assertIn("只读依赖", text)
+        self.assertIn("不复制", text)
+
+    def test_readme_documents_the_complete_workflow_contract(self):
+        self.assertTrue((REPO_ROOT / "README.md").is_file())
+        text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        for required in (
+            "需求讨论与确认",
+            "change_id",
+            "change.md",
+            "只写两次",
+            "一个 Plan",
+            "多个 Task",
+            "项目级 SQLite",
+            "是否开启 Subagent-Driven Development 进行开发？",
+            "返工影响审查",
+            "先改正式材料，再改代码",
+        ):
+            self.assertIn(required, text)
+
+    def test_copied_workflow_integration_test_is_repository_relative(self):
+        test_file = (
+            SKILLS_ROOT
+            / "using-personal-development-workflow"
+            / "tests"
+            / "test_workflow_integration_contract.py"
+        )
+        self.assertTrue(test_file.is_file(), test_file)
+        text = test_file.read_text(encoding="utf-8")
+        self.assertIn("PACKAGE_ROOT", text)
+        self.assertIn('/ "skills"', text)
+        self.assertIn('/ "managing-change-ledger"', text)
+        self.assertIn('/ "scripts"', text)
+        self.assertNotIn("Path.home()", text)
+        self.assertNotIn("PROJECT_ROOT = Path(r\"", text)
+
+    def test_example_configuration_is_sanitized(self):
+        example = REPO_ROOT / "examples" / "personal-development-workflow.json.example"
+        self.assertTrue(example.is_file(), example)
+        text = example.read_text(encoding="utf-8")
+        self.assertIn("<absolute-project-spec-vault-path>", text)
+        self.assertIn("<absolute-code-repository-path>", text)
+        self.assertNotRegex(text, r"[A-Za-z]:\\")
+
+
+if __name__ == "__main__":
+    unittest.main()

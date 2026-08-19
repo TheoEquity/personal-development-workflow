@@ -1,0 +1,4 @@
+interface:
+  display_name: "管理变更事件与总账"
+  short_description: "用 SQLite 维护六类材料引用和个人工作流游标"
+  default_prompt: "使用 $managing-change-ledger 登记变更事件、维护正式材料引用，或查询和更新个人工作流游标。"
