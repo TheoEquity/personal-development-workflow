@@ -1,6 +1,8 @@
 from pathlib import Path
+import os
 import re
 import subprocess
+import tempfile
 import unittest
 
 
@@ -47,6 +49,37 @@ class PackageContractTests(unittest.TestCase):
     def test_required_distribution_files_exist(self):
         missing = [path for path in REQUIRED_PATHS if not (REPO_ROOT / path).is_file()]
         self.assertEqual(missing, [])
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell command shim is Windows-specific")
+    def test_test_entry_point_enables_utf8_for_every_python_process(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            shim = Path(temp_dir) / "python.cmd"
+            shim.write_text(
+                '@echo off\n'
+                'if "%PYTHONUTF8%"=="1" exit /b 0\n'
+                'echo PYTHONUTF8=%PYTHONUTF8% 1>&2\n'
+                'exit /b 97\n',
+                encoding="ascii",
+            )
+            env = os.environ.copy()
+            env.pop("PYTHONUTF8", None)
+            env["PATH"] = f"{temp_dir}{os.pathsep}{env['PATH']}"
+            result = subprocess.run(
+                [
+                    "pwsh",
+                    "-NoProfile",
+                    "-File",
+                    str(REPO_ROOT / "scripts" / "test.ps1"),
+                ],
+                cwd=REPO_ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_runtime_payload_excludes_local_state_and_caches(self):
         forbidden_names = {

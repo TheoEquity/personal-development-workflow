@@ -2,6 +2,7 @@
 param()
 
 $ErrorActionPreference = "Stop"
+$env:PYTHONUTF8 = "1"
 $env:PYTHONDONTWRITEBYTECODE = "1"
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $skillNames = @(
