@@ -24,14 +24,16 @@ flowchart TD
     C --> D["创建登记版 change.md"]
     D --> E["编写并确认 Spec"]
     E --> F["生成或确认测试稿"]
-    F --> G["编写 Plan 并记录远程基线"]
+    F --> T["展示本地候选与远程候选"]
+    T --> G["确认基线并编写 Plan"]
     G --> H["独立 reviewer 审查"]
     H -->|Issues Found| G
     H -->|Approved| I["adopt-plan 安装 plan_ref"]
     I --> J{"是否开启 Subagent-Driven Development 进行开发？"}
-    J -->|开启| Q["fetch Plan 指定远程分支"]
+    J -->|开启| Q{"Plan base_source"}
     J -->|不启动| J
-    Q --> R{"最新完整 SHA 等于 Plan base_sha？"}
+    Q -->|remote| R{"fetch 后仍等于 Plan base_sha？"}
+    Q -->|local| K["验证精确本地 SHA 与干净 worktree"]
     R -->|否| G
     R -->|是| K["从该 SHA 创建或确认隔离 worktree"]
     K --> L["TDD + 多个 Task 实现和本地提交"]
@@ -39,7 +41,7 @@ flowchart TD
     M --> N["按测试稿实际验收并生成独立报告"]
     N -->|通过| O["形成并确认最终逻辑稿"]
     O --> S["写完成版 change.md 并完成事件"]
-    N -->|失败| P["返工影响审查"]
+    N -->|失败| P["统一材料变更评估并等待确认"]
     P -->|材料无需修改| L
     P -->|Plan 需要修改| G
     P -->|Spec 需要修改| E
@@ -52,9 +54,10 @@ flowchart TD
 → 需求讨论与确认
 → 登记 change_id / 创建 change.md
 → 编写并确认 Spec / 生成测试稿
+→ 展示并确认本地/远程 Plan 基线候选
 → 编写、独立评审并采用 Plan
 → 询问是否开启 SDD
-→ fetch Plan 指定远程分支并核对最新完整 SHA
+→ 按 Plan 的本地或远程来源验证精确 SHA
 → 从该 SHA 建立 worktree + TDD + 实现与本地提交
 → code_ref
 → 实际验收与独立报告
@@ -108,19 +111,27 @@ SQLite 继续只保存既有六类材料引用和工作流游标，不增加 `lo
 
 ## Plan 与实现门禁
 
-Spec 和测试稿就绪后，使用外部原生 `writing-plans` 形成 Plan。Plan 必须记录 `base_remote`、`base_branch` 和评审代码所用的 40 位完整 `base_sha`，经过独立 reviewer，并由 `managing-change-ledger adopt-plan` 原子安装新的 `plan_ref`；只有采用成功后才进入 `tdd_coding`。
+Spec 和测试稿就绪后，每次创建或重写 Plan 都先发现候选：枚举相关本地 worktree 的绝对路径、分支或 detached 状态、完整 HEAD 和 clean/dirty，同时只读查询目标远程分支的实际完整 SHA。总控把本地候选与远程候选放在同一张卡片中并等待选择；卡片明确说明：只回复“继续”将采用远程候选。用户也可以明确选择一个尚未推送的本地 commit。
+
+未提交修改不属于任何 SHA。dirty worktree 的 HEAD 可以作为本地候选，但 Plan 调查、评审和后续实现不得混入这些 dirty 修改；若用户要纳入，必须先另行授权形成 commit，再重新展示候选。候选在等待期间移动时，本次选择失效并重新确认。
+
+选择后才使用外部原生 `writing-plans` 形成 Plan。Plan 必须记录 `base_source`、`base_locator` 和评审代码所用的 40 位完整 `base_sha`；远程来源还记录 `base_remote` 与 `base_branch`。Plan 经过独立 reviewer 后，由 `managing-change-ledger adopt-plan` 原子安装新的 `plan_ref`；只有采用成功后才进入 `tdd_coding`。
 
 进入编码前，总控必须逐字询问：
 
 > 是否开启 Subagent-Driven Development 进行开发？
 
-只有当前对话中的明确肯定才授权先 fetch Plan 指定的远程基线分支、创建或进入隔离 worktree、按当前 Plan 编码，并在该范围创建本地 commits。fetch 只更新本地 remote-tracking ref，不会对远程写入，也不会 pull、merge 或 reset 主 checkout。
+只有当前对话中的明确肯定才授权验证 Plan 已选择的基线、创建或进入隔离 worktree、按当前 Plan 编码，并在该范围创建本地 commits。远程来源会先 fetch Plan 指定分支；fetch 只更新本地 remote-tracking ref，不会对远程写入，也不会 pull、merge 或 reset 主 checkout。本地来源不执行远程 fetch 或相等性比较，只验证所选 commit 存在，并使用 HEAD 精确等于 `base_sha` 的干净隔离 worktree。
 
-fetch 后必须解析远程分支的最新完整 SHA。它与 Plan `base_sha` 一致时，才从该 SHA 创建或确认 worktree；不一致时立即关闭代码门，只审查这段远程差异，最小更新并重新评审 Plan。fetch 失败或材料重新采用前，不得创建开发 worktree、写 RED/测试/代码或创建本地 commit。该授权始终不包含 push、PR、merge、清理或 branch finishing。
+远程来源 fetch 后必须解析最新完整 SHA。它与 Plan `base_sha` 一致时，才从该 SHA 创建或确认 worktree；不一致时立即关闭代码门，重新执行材料变更评估和基线选择。任何来源的验证失败或材料重新采用前，都不得创建开发 worktree、写 RED/测试/代码或创建本地 commit。该授权始终不包含 push、PR、merge、清理或 branch finishing。
 
-## 验收失败与返工
+## 统一材料变更评估与返工
 
-验收失败保留原失败报告并停留在同一个 `in_progress` 事件。总控先读取当前正式 `spec_ref` 和 `plan_ref`，执行返工影响审查，分别判断 Spec 和 Plan 是“无需修改、局部修改、结构性修改”。
+内部验收失败、后续新增或纠正需求、已完成事件的跟进、代码调查或 reviewer 发现，以及基线漂移，只要可能修改 Spec、Plan、代码或工作流阶段，都先执行统一材料变更评估。已完成事件和旧引用保持不可变；后续变化需要新事件时也先对相关旧 Spec 与 Plan 分别评估继承、保持或改变关系。
+
+评估分别给出 Spec 和 Plan 的“无需修改、局部修改、结构性修改”结论、依据、精确位置、预期动作和明确保留项。粒度按语义影响决定：局部问题尽量局部修改；局部补丁不足以维持一致性时，结构性修改是正常结果。每一次评估都必须展示并等待用户确认，包括两份材料都无需修改的情况；确认前不改正式材料、代码或阶段。
+
+验收失败还会保留原失败报告并停留在同一个 `in_progress` 事件。等待用户确认本轮评估后，责任阶段按最早拥有问题的位置决定：
 
 责任阶段按最早拥有问题的位置决定：
 
