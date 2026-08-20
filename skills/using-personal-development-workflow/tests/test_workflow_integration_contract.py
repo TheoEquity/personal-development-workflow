@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -253,6 +254,43 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         ):
             self.assertIn(required, baseline)
 
+    def test_dirty_baseline_capture_is_a_snapshot_not_retroactive_tdd(self):
+        baseline = PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
+        for required in (
+            "既有 diff 快照，不是新的实现声明",
+            "`tdd_required=false`",
+            "`tdd_exemption_reason: pre-existing-diff-snapshot-only`",
+            "不允许编辑任何文件",
+            "不构成 TDD 或实现完成证据",
+            "后续实现任务仍必须执行 TDD",
+        ):
+            self.assertIn(required, baseline)
+
+    def test_dirty_baseline_capture_binds_an_immutable_snapshot_manifest(self):
+        for required in (
+            "baseline_snapshot:",
+            "head_sha: <40-character pre-capture HEAD SHA>",
+            "path: <canonical repository-relative path>",
+            "state: <present | deleted>",
+            "mode: <Git mode to stage, or null for deleted>",
+            "content_oid: <Git object id to stage, or null for deleted>",
+        ):
+            self.assertIn(required, self.execution_contract_text)
+
+        baseline = PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
+        for required in (
+            "授权前只读生成",
+            "暂存前只比较当前 worktree manifest",
+            "暂存后与 commit 前",
+            "相对 `head_sha` 的 staged delta",
+            "索引不得包含清单外条目",
+            "rename 按 deleted + present 两项表示",
+            "提交后验证新 HEAD 的唯一 parent 等于 `head_sha`",
+            "已提交 delta manifest 与授权清单逐字段相同",
+            "不得把该 SHA 放入候选卡",
+        ):
+            self.assertIn(required, baseline)
+
     def test_candidate_movement_requires_a_new_selection(self):
         self.assertTrue(PLAN_BASELINE_SELECTION.is_file())
         baseline = PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
@@ -345,6 +383,118 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             "不授权 push、MR、合并、清理或 branch finishing",
         ):
             self.assertIn(required, self.execution_contract_text)
+
+    def test_sdd_offer_is_immutable_and_contract_only_adds_actual_worktree(self):
+        for required in (
+            "authorization_offer:",
+            "repository: <absolute repository root>",
+            "plan_ref: <current immutable plan ref>",
+            "base_sha: <40-character Git commit SHA>",
+            "worktree_creation_authorized: true",
+            "提问前只实例化并展示 `authorization_offer`",
+            "`authorization_offer` 一经展示即不可变",
+            "`workspace_or_branch` 是派生时唯一新增的字段",
+            "逐字段比较",
+            "不得扩大或改写其他字段",
+        ):
+            self.assertIn(required, self.execution_contract_text)
+        self.assertLess(
+            self.execution_contract_text.index("authorization_offer:"),
+            self.execution_contract_text.index(
+                "是否开启 Subagent-Driven Development 进行开发？"
+            ),
+        )
+
+        planning = self.text.split("5. **编写、评审并维护 Plan**", 1)[1].split(
+            "6. **正式 TDD 编码**", 1
+        )[0]
+        self.assertLess(
+            planning.index("`authorization_offer`"),
+            planning.index("是否开启 Subagent-Driven Development 进行开发？"),
+        )
+
+    def test_offer_and_execution_contract_have_exact_canonical_key_sets(self):
+        offer_block = self.execution_contract_text.split(
+            "authorization_offer:\n", 1
+        )[1].split("```", 1)[0]
+        offer_keys = re.findall(r"^  ([a-z_]+):", offer_block, re.MULTILINE)
+        self.assertEqual(
+            offer_keys,
+            [
+                "repository",
+                "plan_ref",
+                "plan_or_tasks",
+                "base_source",
+                "base_locator",
+                "base_sha",
+                "remote_fetch_authorized",
+                "worktree_creation_authorized",
+                "tdd_required",
+                "tdd_exemption_reason",
+                "baseline_snapshot",
+                "local_commit_authorized",
+                "finish_after_execution",
+            ],
+        )
+        self.assertNotRegex(offer_block, r"^  base_(remote|branch|worktree):")
+        self.assertIn("不增加同名顶层字段", self.text)
+
+        contract_block = self.execution_contract_text.split(
+            "execution_contract:\n", 1
+        )[1].split("```", 1)[0]
+        contract_keys = re.findall(r"^  ([a-z_]+):", contract_block, re.MULTILINE)
+        self.assertEqual(
+            contract_keys,
+            [
+                "tdd_required",
+                "tdd_exemption_reason",
+                "baseline_snapshot",
+                "local_commit_authorized",
+                "local_commit_scope",
+                "finish_after_execution",
+            ],
+        )
+
+    def test_sdd_routing_distinguishes_transient_fetch_failure_from_sha_drift(self):
+        for required in (
+            "瞬时执行失败本身不制造材料变更评估",
+            "用户之后回复继续可重试同一受限 fetch",
+            "远程成功返回的 SHA",
+            "才属于基线漂移：旧 offer 立即失效",
+        ):
+            self.assertIn(required, self.text + self.execution_contract_text)
+
+    def test_sdd_offer_derivation_has_canonical_plan_and_worktree_values(self):
+        for required in (
+            "plan_or_tasks: [<the same current immutable plan ref>]",
+            "tdd_required: <true | false>",
+            "tdd_exemption_reason: <concrete pure-non-code reason, or null>",
+            "workspace: <actual absolute worktree path>",
+            "branch: <actual branch name, or null when detached>",
+            "按字段名与归一化值比较",
+            "YAML 缩进、键顺序或引号样式不参与身份比较",
+            "只要当前 SDD Plan 含有代码任务",
+        ):
+            self.assertIn(required, self.execution_contract_text)
+
+    def test_local_offer_uses_a_structured_source_locator(self):
+        for required in (
+            "kind: <remote | local>",
+            "remote: <exact remote, or null for local>",
+            "worktree: <absolute source worktree, or null for remote>",
+            "branch: <exact source branch, or null when detached>",
+            "detached_sha: <40-character SHA when detached, otherwise null>",
+            "不得从带分隔符的单个字符串反向解析",
+        ):
+            self.assertIn(required, self.execution_contract_text)
+
+        baseline = PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
+        for required in (
+            "`base_worktree`",
+            "`base_local_branch`",
+            "`base_detached_sha`",
+        ):
+            self.assertIn(required, baseline)
 
     def test_controller_owns_one_change_id_for_all_materials(self):
         for required in (

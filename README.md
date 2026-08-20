@@ -113,19 +113,19 @@ SQLite 继续只保存既有六类材料引用和工作流游标，不增加 `lo
 
 Spec 和测试稿就绪后，每次创建 Plan 或形成新的 `plan_ref` 都先发现候选，包括内容不变但重新提交或锚定的情况。总控枚举相关本地 worktree 的绝对路径、分支或 detached 状态、完整 HEAD 和 clean/dirty，同时只读查询目标远程分支的实际完整 SHA，再把本地候选与远程候选放在同一张卡片中等待选择；卡片明确说明：只回复“继续”将采用远程候选。用户也可以明确选择一个尚未推送的本地 commit。
 
-未提交修改不属于任何 SHA。dirty worktree 的 HEAD 可以作为本地候选，但 Plan 调查、评审和后续实现不得混入这些 dirty 修改；若用户要纳入，必须先另行授权形成 commit，再重新展示候选。候选在等待期间移动时，本次选择失效并重新确认。
+未提交修改不属于任何 SHA。dirty worktree 的 HEAD 可以作为本地候选，但 Plan 调查、评审和后续实现不得混入这些 dirty 修改；若用户要纳入，必须先另行授权形成一次精确的 `baseline-capture:<change_id>` 快照 commit，再重新展示候选。授权前用 HEAD 和排序后的 path/state/mode/content OID 清单冻结 `baseline_snapshot`，暂存前与 commit 前机械复核且禁止清单外 index 条目。该提交只是对原样既有 diff 的基线捕获，不允许编辑，不要求事后追溯制造 RED，也不构成 TDD 或实现完成证据；后续实现仍正常执行 TDD。候选在等待期间移动时，本次选择失效并重新确认。
 
-选择后才使用外部原生 `writing-plans` 形成 Plan。Plan 必须记录 `base_source`、`base_locator` 和评审代码所用的 40 位完整 `base_sha`；远程来源还记录 `base_remote` 与 `base_branch`。Plan 经过独立 reviewer 后，由 `managing-change-ledger adopt-plan` 原子安装新的 `plan_ref`；只有采用成功后才进入 `tdd_coding`。
+选择后才使用外部原生 `writing-plans` 形成 Plan。Plan 必须记录 `base_source`、可读 `base_locator` 和评审代码所用的 40 位完整 `base_sha`；远程来源还记录 `base_remote` 与 `base_branch`，本地来源另记 `base_worktree`、`base_local_branch`、`base_detached_sha`，供机械验证而不从带分隔符的 locator 字符串反向解析。Plan 经过独立 reviewer 后，由 `managing-change-ledger adopt-plan` 原子安装新的 `plan_ref`；只有采用成功后才进入 `tdd_coding`。
 
 同一轮并行处理多个 Bug 时，候选选择提升为整轮共用的一张卡片和一次选择，而不是强制远程：第一轮目标分支头、已有开放 MR 时的 MR 实际源分支头只是远程候选；相关本地 commit 仍作为本地候选展示。整轮明确选择本地后，每个 Bug Plan 记录相同的 `base_source=local`、来源定位和完整 `base_sha`，每个独立 Worktree 都从该 SHA 创建；该 commit 可以尚未推送，也不执行远程相等性比较。只回复“继续”仍选择卡片中的唯一远程候选。
 
-进入编码前，总控必须逐字询问：
+进入编码前，总控先展示不可变 `authorization_offer`，其中固定仓库、`plan_ref`/Plan 范围、所选基线来源与完整 SHA、来源验证权限、允许创建 worktree、本地 commit 和禁止 finishing 的边界；尚不存在的开发 worktree 不得猜测。然后必须逐字询问：
 
 > 是否开启 Subagent-Driven Development 进行开发？
 
-只有当前对话中的明确肯定才授权验证 Plan 已选择的基线、创建或进入隔离 worktree、按当前 Plan 编码，并在该范围创建本地 commits。远程来源会先 fetch Plan 指定分支；fetch 只更新本地 remote-tracking ref，不会对远程写入，也不会 pull、merge 或 reset 主 checkout。本地来源不执行远程 fetch 或相等性比较，只验证所选 commit 存在，并使用 HEAD 精确等于 `base_sha` 的干净隔离 worktree。
+`authorization_offer` 展示后不可改写；只有当前对话中的明确肯定才接受这份原样 offer，并授权验证 Plan 已选择的基线、创建或进入隔离 worktree、按当前 Plan 编码，以及在该范围创建本地 commits。远程来源会先 fetch Plan 指定分支；fetch 只更新本地 remote-tracking ref，不会对远程写入，也不会 pull、merge 或 reset 主 checkout。本地来源不执行远程 fetch 或相等性比较，只验证所选 commit 存在，并使用 HEAD 精确等于 `base_sha` 的干净隔离 worktree。
 
-远程来源 fetch 后必须解析最新完整 SHA。它与 Plan `base_sha` 一致时，才从该 SHA 创建或确认 worktree；不一致时立即关闭代码门，重新执行材料变更评估和基线选择。任何来源的验证失败或材料重新采用前，都不得创建开发 worktree、写 RED/测试/代码或创建本地 commit。该授权始终不包含 push、PR、merge、清理或 branch finishing。
+远程来源 fetch 后必须解析最新完整 SHA。它与 Plan `base_sha` 一致时，才从该 SHA 创建或确认 worktree；不一致时立即关闭代码门，重新执行材料变更评估和基线选择。任何来源的验证失败或材料重新采用前，都不得创建开发 worktree、写 RED/测试/代码或创建本地 commit。创建成功后才从已接受 offer 机械派生最终 `execution_contract`，唯一新增值是工具实际返回并验证的 worktree/branch；仓库、Plan 范围和其他权限字段必须逐项相等，禁止扩权。该授权始终不包含 push、PR、merge、清理或 branch finishing。
 
 ## 统一材料变更评估与返工
 

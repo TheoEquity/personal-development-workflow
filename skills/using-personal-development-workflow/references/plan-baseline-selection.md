@@ -20,8 +20,12 @@
 
 正式 Plan 尚未存在或尚未产生本轮 `Task N` 时，允许使用 `execution_contract` 的 `plan_or_tasks` 身份 `baseline-capture:<change_id>` 表示一次受限快照。实例化时必须绑定配置仓库、精确绝对 worktree/branch，并且只包含用户点名纳入基线的 diff；尚未存在 `Task N` 不能用未来任务占位。
 
-- 该授权只允许检查、暂存并提交已经存在的点名 diff，不允许顺手编辑文件，不能授权后续实现 commit，也不更新 `code_ref`。
-- code diff 的 `tdd_required` 仍为 `true`，提交前必须有该 diff 对应的有效 TDD 证据；只有控制器按执行合同证明整个捕获范围都是纯非代码内容时才可设为 `false`。
+- 请求 commit 授权前，先按 [execution-contract.md](execution-contract.md) 授权前只读生成 `baseline_snapshot`：绑定捕获前完整 HEAD，并把用户点名范围展开成按仓库相对路径排序且无重复的 path/state/mode/content OID 清单。untracked 文件必须逐文件列出，rename 按 deleted + present 两项表示；不能用目录名、自然语言“当前 diff”或未来暂存区代替清单。
+- 该授权只允许检查、暂存并提交已经存在的点名 diff，不允许编辑任何文件，不能授权后续实现 commit，也不更新 `code_ref`。暂存前与 commit 前都必须确认范围仍精确等于用户点名的既有 diff；内容发生变化时旧授权失效。
+- 暂存前只比较当前 worktree manifest 与授权清单，并确认相对 `head_sha` 的 staged delta 不含清单外路径；不能把包含所有 tracked 文件的原始 Git index 当成待提交 delta。然后只暂存 manifest 路径。暂存后与 commit 前再次逐字段核对当前 manifest，以及相对 `head_sha` 的 staged delta 的 path、mode、content OID；索引不得包含清单外条目。任何不一致都停止，不替用户清理或重写现有 index，必须重新展示新 manifest 并取得新授权。
+- 使用正常 hooks 创建一次 commit；禁止 `--no-verify`。提交后验证新 HEAD 的唯一 parent 等于 `head_sha`，已提交 delta manifest 与授权清单逐字段相同，新 HEAD 相对 index 无 staged delta，且捕获路径没有 hook 遗留的新 worktree 修改。无关的未暂存路径继续按 dirty 排除。任一 post-commit 检查失败时授权已经耗尽：不得 amend、reset、重试、更新 `code_ref`，也不得把该 SHA 放入候选卡；报告实际 commit 并等待用户另行明确处理。
+- baseline capture 是既有 diff 快照，不是新的实现声明。无论快照是代码、测试还是非代码，都在合同内使用 `tdd_required=false` 和 `tdd_exemption_reason: pre-existing-diff-snapshot-only`；它解决的是无法追溯制造实现前 RED 的快照问题，不构成 TDD 或实现完成证据，不能用来宣称代码正确、测试充分或任务已完成。
+- 该例外只覆盖这一次原样快照 commit；后续实现任务仍必须执行 TDD，不能继承本次豁免、提交授权或证据。若要编辑、拆分、补测或修正快照内容，立即退出 capture，按正式任务重新取得相应材料、TDD 与执行授权。
 - 若已有正式材料且 dirty 事实可能使其失效，先完成材料变更评估；不得用捕获 commit 绕过材料门禁。
 - 提交形成新 SHA 后，本次捕获授权即耗尽；重新运行本地/远程发现、展示候选卡并等待选择，不能把旧选择或本授权带入规划和实现。
 
@@ -54,7 +58,7 @@ Plan 基线候选
 
 1. 协调入口只建立一张共同基线候选卡并等待一次选择。卡片仍按本文件展示全部直接相关的本地候选和一个实际远程候选；第一轮以目标远程分支为远程候选，已有开放 MR 时以 MR 实际源分支头为远程候选。
 2. 用户在该卡片后只回复“继续”时选择唯一远程候选；明确选择一个本地候选时选择本地。本地共同基线可以尚未推送，不要求与远程候选相等。
-3. 选择结果原样传给本轮所有 Bug Plan。每份 Plan 记录相同的 `base_source`、`base_locator` 和 40 位完整 `base_sha`；远程来源的 `base_remote`、`base_branch` 也相同，本地来源的绝对来源 worktree、branch/detached、pushed 状态和 dirty 排除说明也相同。`base_locator` 记录共同基线的来源定位，不是各 Bug 后续独立开发 worktree 的路径。
+3. 选择结果原样传给本轮所有 Bug Plan。每份 Plan 记录相同的 `base_source`、`base_locator` 和 40 位完整 `base_sha`；远程来源的 `base_remote`、`base_branch` 也相同，本地来源的 `base_worktree`、`base_local_branch`、`base_detached_sha`、pushed 状态和 dirty 排除说明也相同。`base_locator` 只作共同基线的可读来源标签，不是各 Bug 后续独立开发 worktree 的路径，也不得代替结构化本地字段参与机械验证。
 4. 每个 Bug 仍创建自己的隔离 worktree，但都使用选定的同一个 `base_sha` 作为强制起点。本地来源不执行远程 fetch 或远程相等性比较；远程来源继续执行对应的远程门禁。
 5. 选中候选在所有 Plan 完成选择验证前移动时，整轮选择失效，重新生成一张共同基线候选卡；不得只替换某一个 Bug 的基线。未选候选移动不改变已经选定的共同基线。
 
@@ -78,12 +82,12 @@ Plan 基线候选
 
 ```text
 base_source: remote | local
-base_locator: <remote/branch | absolute-worktree@branch-or-detached>
+base_locator: <可读来源标签，不作机械解析>
 base_sha: <40 位完整 Git commit SHA>
 ```
 
 - `base_source=remote` 时，额外记录可机械解析的 `base_remote` 与 `base_branch`。
-- `base_source=local` 时，`base_locator` 必须包含选择时的绝对 worktree 与 branch/detached 身份，并记录 pushed 状态和 dirty 修改排除说明。
+- `base_source=local` 时，额外逐行记录 `base_worktree`（选择时的绝对来源 worktree）、`base_local_branch`（branch 名；detached 时为 `null`）和 `base_detached_sha`（detached 时为选择的完整 SHA；有 branch 时为 `null`），并记录 pushed 状态和 dirty 修改排除说明。`base_locator` 仅供人读，机械验证只使用这些结构化字段，不从 `absolute-worktree@branch` 之类字符串猜测分隔位置。
 - Plan reviewer 必须收到这些字段、配置仓库绝对路径和精确 `base_sha` 的代码树；输入不一致时不能批准或采用 Plan。
 
 ## 开发入口分流
