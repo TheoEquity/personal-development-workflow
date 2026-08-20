@@ -207,6 +207,7 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             "不创建 worktree、不修改代码、不创建本地 commit",
         ):
             self.assertIn(required, self.text)
+        self.assertIn("只回复“继续”不算明确开启 SDD", self.text)
 
     def test_plan_records_the_confirmed_local_or_remote_baseline(self):
         for required in (
@@ -242,6 +243,16 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         ):
             self.assertIn(required, baseline)
 
+    def test_dirty_baseline_capture_has_a_bounded_preplan_commit_scope(self):
+        baseline = PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
+        for required in (
+            "`baseline-capture:<change_id>`",
+            "尚未存在 `Task N`",
+            "只包含用户点名纳入基线的 diff",
+            "不能授权后续实现 commit",
+        ):
+            self.assertIn(required, baseline)
+
     def test_candidate_movement_requires_a_new_selection(self):
         self.assertTrue(PLAN_BASELINE_SELECTION.is_file())
         baseline = PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
@@ -250,6 +261,15 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             "重新执行选择门禁",
             "本地定位对象已经移动",
             "重新展示候选",
+        ):
+            self.assertIn(required, baseline)
+
+    def test_every_new_plan_ref_reselects_a_baseline(self):
+        baseline = PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
+        for required in (
+            "任何会产生新 `plan_ref` 的 Plan 修改",
+            "内容不变但重新锚定到新的 Git SHA",
+            "只有选中的候选",
         ):
             self.assertIn(required, baseline)
 
@@ -277,6 +297,7 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             "只审查这段远程差异",
             "重新评审、提交并由 `adopt-plan` 采用",
             "不对主 checkout 执行 `git pull`、merge 或 reset",
+            "保持当前阶段并先执行材料变更评估",
         ):
             self.assertIn(required, self.text)
 
@@ -287,6 +308,13 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             "`HEAD` 必须逐字等于 `base_sha`",
             "工作区必须干净",
             "创建新的隔离 worktree",
+        ):
+            self.assertIn(required, self.text)
+
+    def test_status_and_stop_rules_branch_on_the_selected_baseline_source(self):
+        for required in (
+            "按 Plan 的 `base_source` 执行对应基线门禁",
+            "仅当 `base_source=remote` 时",
         ):
             self.assertIn(required, self.text)
 
@@ -443,6 +471,16 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             "确认前不得修改、保存或提交 Spec/Plan",
             "确认前不得修改生产代码或测试代码",
             "确认前不得移动 `current_stage`",
+        ):
+            self.assertIn(required, assessment)
+
+    def test_material_assessment_confirmation_is_explicit_and_version_specific(self):
+        assessment = self.material_change_assessment_text
+        for required in (
+            "明确同意 Spec 与 Plan 两份结论",
+            "只回复“继续”不构成确认",
+            "正常的新事件登记不是材料变更",
+            "第二轮仍输出 Spec 与 Plan 两份结论",
         ):
             self.assertIn(required, assessment)
 

@@ -30,6 +30,14 @@ execution_contract:
   cleanup, or any finishing workflow requires a later explicit request and
   its own authorization.
 
+Before a Plan has a current `Task N`, a separately confirmed baseline snapshot
+uses `plan_or_tasks: [baseline-capture:<change_id>]`. This narrow identity may
+authorize one local commit of the explicitly named existing diff in the exact
+repository/worktree scope; it does not authorize file edits, later implementation
+commits, `code_ref` updates, or any remote action. Code diff keeps
+`tdd_required=true`; only an entirely pure non-code capture may use the existing
+controller-declared exemption. The authorization is consumed by that commit.
+
 ## Personal-workflow SDD handoff
 
 个人工作流中的固定问题 `是否开启 Subagent-Driven Development 进行开发？`
@@ -45,11 +53,11 @@ Plan 显示的 `base_source`、`base_locator` 与评审时的完整 `base_sha`�
 执行一次开发准备 fetch，只更新本地 remote-tracking ref 并解析最新完整
 commit SHA。它在执行顺序中必须先于 worktree 创建或复用；不授权任何远程写入，也不允许
 `pull`、merge 或 reset 主 checkout。fetch 失败或 SHA 漂移时，worktree、编码和 commit
-授权尚不能落到实际执行范围；总控按个人工作流返回材料阶段。
+授权尚不能落到实际执行范围；总控保持当前阶段，先展示材料变更评估并等待确认，确认后才按个人工作流返回责任材料阶段。
 
 当 `base_source=local` 时，同一答复只授权验证精确显示的本地 `base_sha`，以及复用或从该
 SHA 创建干净隔离 worktree；它不授权远程 fetch 或远程相等性比较。定位对象移动、commit
-不存在、HEAD 不相等或 worktree dirty 时，授权尚不能落到编码和 commit 范围，总控返回材料阶段。
+不存在、HEAD 不相等或 worktree dirty 时，授权尚不能落到编码和 commit 范围。若 Plan 记录的本地来源定位对象移动或 commit 不存在，总控保持当前阶段，先展示材料变更评估并等待确认；确认后才返回责任材料阶段。仅目标开发 worktree 不匹配时，从精确 `base_sha` 创建新的干净隔离 worktree。
 
 所选来源验证通过且 worktree 建立后，把 `local_commit_authorized=true` 实例化为：配置中的代码仓库绝对路径、
 实际返回的隔离 worktree 及其 branch、以及已显示的 Plan/Task 身份。范围不能包含其他仓库、
