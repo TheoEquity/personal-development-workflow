@@ -54,8 +54,10 @@ class PackageContractTests(unittest.TestCase):
     def test_test_entry_point_enables_utf8_for_every_python_process(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             shim = Path(temp_dir) / "python.cmd"
+            marker = Path(temp_dir) / "python-invocations.txt"
             shim.write_text(
                 '@echo off\n'
+                'echo invoked>>"%UTF8_PROBE_MARKER%"\n'
                 'if "%PYTHONUTF8%"=="1" exit /b 0\n'
                 'echo PYTHONUTF8=%PYTHONUTF8% 1>&2\n'
                 'exit /b 97\n',
@@ -63,6 +65,7 @@ class PackageContractTests(unittest.TestCase):
             )
             env = os.environ.copy()
             env.pop("PYTHONUTF8", None)
+            env["UTF8_PROBE_MARKER"] = str(marker)
             env["PATH"] = f"{temp_dir}{os.pathsep}{env['PATH']}"
             result = subprocess.run(
                 [
@@ -79,7 +82,9 @@ class PackageContractTests(unittest.TestCase):
                 errors="replace",
             )
 
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(marker.is_file(), "test.ps1 did not invoke the Python probe")
+            self.assertGreaterEqual(len(marker.read_text(encoding="ascii").splitlines()), 1)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_runtime_payload_excludes_local_state_and_caches(self):
         forbidden_names = {
