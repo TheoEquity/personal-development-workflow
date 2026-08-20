@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = ROOT.parents[1]
 WORKFLOW = ROOT / "SKILL.md"
 EXECUTION_CONTRACT = ROOT / "references" / "execution-contract.md"
+MATERIAL_CHANGE_ASSESSMENT = ROOT / "references" / "material-change-assessment.md"
 EXAMPLE_CONFIG = (
     PACKAGE_ROOT / "examples" / "personal-development-workflow.json.example"
 )
@@ -27,6 +28,9 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.text = WORKFLOW.read_text(encoding="utf-8")
         cls.execution_contract_text = EXECUTION_CONTRACT.read_text(encoding="utf-8")
+        cls.material_change_assessment_text = MATERIAL_CHANGE_ASSESSMENT.read_text(
+            encoding="utf-8"
+        )
 
     def test_plan_review_protocol_has_one_normative_source(self):
         self.assertIn("`writing-plans` 的 `Execution Handoff`", self.text)
@@ -304,55 +308,55 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
 
     def test_rework_impact_audit_reads_current_refs_before_routing(self):
         for required in (
-            "返工影响审查",
-            "移动游标前",
+            "材料变更评估",
+            "任何材料、代码或阶段变化之前",
             "当前 `spec_ref` 与 `plan_ref`",
             "完整 Git SHA",
-            "不可变内容",
+            "读取不可变内容",
             "`无需修改 / 局部修改 / 结构性修改`",
-            "具体章节、`impact_id` 或 `Task N`",
+            "具体章节或 impact_id",
+            "具体章节或 Task N",
         ):
-            self.assertIn(required, self.text)
+            self.assertIn(required, self.material_change_assessment_text)
 
     def test_rework_routes_to_the_earliest_owning_stage(self):
         for required in (
-            "Spec 与 Plan 均为 `无需修改`：回到 `tdd_coding`",
-            "只有 Plan 需要修改：回到 `writing_plan`",
-            "Spec 需要修改：回到 `writing_spec`",
-            "只重新审查受新 Spec 影响的 Plan 部分",
+            "Spec 与 Plan 均无需修改",
+            "只有 Plan 需要变化",
+            "Spec 需要变化",
+            "只重新评估新 Spec 实际影响的 Plan 部分",
         ):
-            self.assertIn(required, self.text)
+            self.assertIn(required, self.material_change_assessment_text)
 
     def test_rework_rejects_unscoped_document_rewrites(self):
         for required in (
-            "以当前正式引用为基线检查 Git diff",
-            "审查范围外的大段删除、整份替换、Task 全部重建或无理由重编号",
+            "以评估所用正式引用为基线检查 Git diff",
+            "评估范围外的大段删除、整份替换、Task 全部重建或无理由重编号",
             "局部补丁不足",
-            "取得用户明确确认",
-            "新增行为、范围扩展或已完成事件之后的变化必须新建事件",
+            "等待用户明确确认",
+            "已完成事件保持不可变",
         ):
-            self.assertIn(required, self.text)
+            self.assertIn(required, self.material_change_assessment_text)
 
     def test_rework_material_changes_close_the_code_gate(self):
         for required in (
-            "只要 Spec 或 Plan 不是 `无需修改`，代码门立即关闭",
-            "不得修改生产代码或测试代码",
-            "不得启动实现编排器",
-            "不得创建新的代码 commit",
-            "不得更新 `code_ref`",
+            "任一材料需要修改时，代码门保持关闭",
+            "确认前不得修改生产代码或测试代码",
+            "启动实现器",
+            "创建代码 commit",
+            "更新 `code_ref`",
         ):
-            self.assertIn(required, self.text)
+            self.assertIn(required, self.material_change_assessment_text)
 
     def test_rework_reopens_code_gate_only_after_material_adoption(self):
         for required in (
-            "先修改并确认 Spec、提交并更新 `spec_ref`",
-            "再修改 Plan、完成独立 review",
-            "`adopt-plan` 成功并安装新 `plan_ref`",
-            "才允许进入 `tdd_coding`",
-            "材料修改前的编码或 commit 授权立即失效",
-            "Spec 与 Plan 均为 `无需修改` 时允许直接进入 `tdd_coding`",
+            "先修改、确认并提交 Spec，更新 `spec_ref`",
+            "重新独立 review 并调用 `adopt-plan`",
+            "只有材料门重新打开后",
+            "旧执行授权都不能恢复本次确认",
+            "Spec 与 Plan 均无需修改",
         ):
-            self.assertIn(required, self.text)
+            self.assertIn(required, self.material_change_assessment_text)
 
     def test_rework_freezes_preexisting_code_until_the_new_plan_is_adopted(self):
         for required in (
@@ -364,11 +368,52 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             "实际 worktree diff",
             "重新满足 TDD 与授权门禁",
         ):
-            self.assertIn(required, self.text)
+            self.assertIn(required, self.material_change_assessment_text)
 
     def test_impact_assessment_does_not_expand_test_drafts(self):
         self.assertIn("测试稿不因影响表自动扩展回归项", self.text)
         self.assertIn("不修改 `writing-test-drafts`", self.text)
+
+    def test_material_change_assessment_is_required_before_material_or_stage_changes(self):
+        self.assertIn(
+            "[material-change-assessment.md](references/material-change-assessment.md)",
+            self.text,
+        )
+        self.assertTrue(MATERIAL_CHANGE_ASSESSMENT.is_file())
+        assessment = self.material_change_assessment_text
+        for required in (
+            "每次材料变更评估输出后都立即停止",
+            "等待用户明确确认",
+            "包括 Spec 与 Plan 均为 `无需修改`",
+            "确认前不得修改、保存或提交 Spec/Plan",
+            "确认前不得修改生产代码或测试代码",
+            "确认前不得移动 `current_stage`",
+        ):
+            self.assertIn(required, assessment)
+
+    def test_material_change_assessment_supports_local_and_structural_scope(self):
+        self.assertTrue(MATERIAL_CHANGE_ASSESSMENT.is_file())
+        assessment = self.material_change_assessment_text
+        for required in (
+            "`无需修改 / 局部修改 / 结构性修改`",
+            "修改规模只能由语义影响决定",
+            "局部补丁为何不足",
+            "明确保留",
+            "允许合理的大幅修改",
+        ):
+            self.assertIn(required, assessment)
+
+    def test_followup_changes_assess_related_immutable_materials_without_rewriting_them(self):
+        self.assertTrue(MATERIAL_CHANGE_ASSESSMENT.is_file())
+        assessment = self.material_change_assessment_text
+        for required in (
+            "后续追加内容",
+            "已完成事件保持不可变",
+            "只读取这些相关事件的正式引用",
+            "新事件",
+            "不得仅因为事件位于同一项目",
+        ):
+            self.assertIn(required, assessment)
 
     def test_parallel_bug_chats_share_one_frozen_git_baseline(self):
         self.assertIn("### 跨 Bug 并行与持续 MR 集线", self.text)

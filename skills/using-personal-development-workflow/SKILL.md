@@ -97,6 +97,7 @@ if command 是关闭:
 
 4. **建立验收基准**
    - 新需求、Spec 功能缺陷或需要扩展行为契约时，使用 `writing-specs` 创建或修改 `specs/<change_id>.md`；完整展示并经用户确认后保存。
+   - `writing_spec` 需要修改当前材料，或新事件与需求讨论已经明确关联的既有正式事件存在继承、保持或改变关系时，先完整执行 [material-change-assessment.md](references/material-change-assessment.md) 并等待用户确认；确认前不得调用写作 Skill 或保存候选稿。没有直接相关正式材料的新需求不制造空评估。
    - Spec 必须包含 `## 既有功能与流程影响`：用稳定 `impact_id` 记录直接相关的既有行为和保持、兼容扩展或明确改变结论；没有直接关联项时使用 `writing-specs` 定义的唯一无影响结论。行为影响不确定时保持 `writing_spec`，不得下放给 Plan。
    - Spec 形成有效 `spec_ref` 后，`writing-specs` 调用 `writing-test-drafts` 作为同一 `writing_spec` 阶段的子节点，生成 `tests/<change_id>.md`。用户提供的操作步骤、流程和预期结果优先；用户未提供时由测试稿 Skill 根据已确认 Spec 和可验证系统入口生成。
    - 测试稿不因影响表自动扩展回归项；本工作流不修改 `writing-test-drafts`，其测试项仍只由用户步骤和已确认的规范性行为驱动。
@@ -183,50 +184,14 @@ Spec 与测试稿 → Plan → TDD 编码 → 内部验收 → 独立验收报�
 1. 保留并提交失败验收报告，让当前事件的 `evidence_ref` 指向该报告；不得覆盖、删除或把失败改写成通过。
 2. 使用 `writing-test-drafts` 的唯一 validator 读取报告；只消费其规范化绑定、测试项和失败回传结果。报告只提供事实，不决定路由；本入口不重新解析或列举报告字段。
 
-#### 返工影响审查（移动游标前）
+#### 统一材料变更评估（任何材料或阶段变化前）
 
-内部失败需要修改代码或材料时，必须先完成返工影响审查，再移动游标。总控从 `workflow-status` 返回的绑定事件读取当前 `spec_ref` 与 `plan_ref`，按引用中的完整 Git SHA 从当前项目 Spec Vault 读取两份不可变内容；工作区文件、文件时间、聊天记录或旧引用不能替代当前正式版本。任一引用无效、内容无法读取、身份不一致或失败事实不足时保持当前阶段并报告缺口，不猜测修改程度。
+内部失败、需求修正、后续追加、范围扩展、已完成事件之后的新变化，以及 reviewer、代码调查或基线漂移可能使正式材料失效时，**REQUIRED REFERENCE:** 完整读取 [material-change-assessment.md](references/material-change-assessment.md)。总控只使用当前事件或需求讨论已经明确关联事件的不可变正式引用，先形成 Spec 与 Plan 两份结论，完整展示并等待用户确认；确认前不修改材料、代码或游标。
 
-审查固定先输出两份独立结论：
-
-```text
-返工影响审查
-- Spec：<无需修改 / 局部修改 / 结构性修改>
-  - 位置：<具体章节或 impact_id；无需修改时写“无”>
-  - 依据：<失败事实与当前正式 Spec 的对照>
-  - 动作：<保留 / 定点修改 / 结构性修改>
-- Plan：<无需修改 / 局部修改 / 结构性修改>
-  - 位置：<具体章节或 Task N；无需修改时写“无”>
-  - 依据：<失败事实、当前正式 Plan 与必要代码事实的对照>
-  - 动作：<保留 / 定点修改 / 结构性修改>
-```
-
-每个结论只允许 `无需修改 / 局部修改 / 结构性修改`，并给出具体章节、`impact_id` 或 `Task N`；不能用改动行数、文件数或主观百分比代替语义判断。“无需修改”也必须说明当前材料已经覆盖该失败，不能只写结论。
-
-材料顺序是代码返工的硬门禁：只要 Spec 或 Plan 不是 `无需修改`，代码门立即关闭。关闭期间不得修改生产代码或测试代码、不得启动实现编排器、不得创建新的代码 commit、不得更新 `code_ref`；负责人催促、已有投入或旧授权都不能放宽该顺序。
-
-如果审查开始时已经存在材料修改前产生的代码改动，将其冻结但不自动删除；在材料门禁重新打开前，不得继续修改、提交或更新 `code_ref`。冻结只保存现场，不代表这些改动符合新材料，也不赋予继续编码或 commit 的权限。
-
-材料门禁按依赖顺序重新打开：
-
-1. Spec 需要修改时，先修改并确认 Spec、提交并更新 `spec_ref`；完成前不得并行修改 Plan 或代码。
-2. Plan 需要修改时，再修改 Plan、完成独立 review、提交候选 Plan；Spec 不需要修改时直接从当前正式 `spec_ref` 开始本步。
-3. 只有 `adopt-plan` 成功并安装新 `plan_ref`，才允许进入 `tdd_coding`。材料修改前的编码或 commit 授权立即失效；进入 `tdd_coding` 后必须按正式编码入口重新展示新版材料与实际执行范围，并重新满足 SDD 选择和执行合同门禁。
-4. Spec 与 Plan 均为 `无需修改` 时允许直接进入 `tdd_coding`，但仍须复核当前对话授权、正式引用和 TDD 证据，不能从持久化游标或旧对话推定授权。
-
-如果存在被冻结的代码，采用材料后先以新 `spec_ref`/`plan_ref` 对照实际 worktree diff；只有差异仍落在新版 Plan 范围内并重新满足 TDD 与授权门禁，才可继续。超出范围的差异保持冻结并报告，不自动删除，也不以先提交再补材料的方式绕过门禁。
-
-3. 完成审查后只倒回一个最早拥有问题的阶段：
-   - Spec 与 Plan 均为 `无需修改`：回到 `tdd_coding`，按当前材料做最小 TDD 修复；
-   - 只有 Plan 需要修改：回到 `writing_plan`，只修改审查列出的实现兼容性分析、任务或关键分支并重新评审、采用；
-   - Spec 需要修改：回到 `writing_spec`，先定点修改并确认行为契约；Spec 确认后只重新审查受新 Spec 影响的 Plan 部分，不默认重做整份 Plan；
-   - 测试操作、预期映射、数据或环境有误：新流程回到主线步骤 4 的测试稿子节点修正；已有 `writing_test` 游标可按步骤 7 兼容处理；只需修正环境时停在步骤 8 后重测。
-   - 确定责任阶段后，新流程分别把 `current_stage` 写为 `writing_spec`、`writing_plan`、`tdd_coding` 或 `acceptance`；`writing_test` 仅为已有游标兼容，游标允许回退，不创建新事件。
-4. 修改 Spec 或 Plan 时，把审查列出的位置原样传给对应写作 Skill；候选材料保存前以当前正式引用为基线检查 Git diff，保留审查范围外的规则、`impact_id`、兼容性结论和 `Task N`。审查范围外的大段删除、整份替换、Task 全部重建或无理由重编号必须拒绝。`结构性修改` 只在多个核心行为、整体实现路线或任务依赖图已经失效且局部补丁不足时成立，并在写入前取得用户明确确认。
-5. 修正后更新当前事件受影响的材料引用和 `code_ref`。Plan 有变化时必须重新保存、评审、提交并更新 `plan_ref`；不能因已经编码而跳过。原测试稿仍完整覆盖时复用；否则更新测试稿。每次实际验收都生成新报告，旧失败报告继续保留。
+3. 用户确认评估后，只倒回该 reference 判定的最早责任阶段。Spec 需要变化时先进入 `writing_spec`；只有 Plan 需要变化时进入 `writing_plan`；两份材料均无需修改且事实属于实现偏差时回到 `tdd_coding`。测试操作、数据或环境有误时按既有测试稿/验收路径处理。
+4. 把已确认的位置、预计动作和明确保留项原样传给对应写作 Skill。材料需要变化时，先完成 Spec 确认与引用更新，再完成 Plan 独立 review、提交和 `adopt-plan`；代码门和旧执行授权保持关闭，直到新材料采用完成。
+5. 内部失败继续使用原 `change_id`；新增行为、范围扩展、已完成事件之后的变化和当前开发/内部验收以外的外部 Bug 反馈必须建立新事件。旧事件及其正式引用保持不可变。
 6. 重复本 Loop，直到最新报告全部通过、六类引用有效且报告 `code_ref` 与总账一致，再进入主线步骤 10；逻辑稿确认后才进入步骤 11。
-
-内部失败不会产生新事件。新增行为、范围扩展或已完成事件之后的变化必须新建事件；当前开发/内部验收以外的外部 Bug 反馈也回到主线步骤 3 建立事件，不得借返工审查塞回旧事件。
 
 ### 跨 Bug 并行与持续 MR 集线
 
@@ -318,7 +283,7 @@ python <managing-change-ledger>/scripts/change_ledger.py --config <config-path> 
 | `requirement_discussion` 且尚未绑定事件 | 继续需求讨论；结论确认后写为 `register_change` |
 | `research` 或 `prototype` | 完成已授权的发现活动；结果返回需求讨论，结论已完整确认时进入事件登记 |
 | `register_change` 且尚未绑定事件 | 登记事件；绑定后固定进入 `writing_spec`，由该阶段形成或核对当前事件的 `spec_ref` 与 `test_ref` |
-| `writing_spec` | 读取/编写 Spec，确认既有功能与流程影响，扫描非确定性的可能影响范围，并由测试稿子节点生成或修正测试稿；`spec_ref` 与 `test_ref` 都更新后进入 Plan |
+| `writing_spec` | 已有或明确相关正式材料时先完成并确认材料变更评估；随后读取/编写 Spec，确认既有功能与流程影响，扫描非确定性的可能影响范围，并由测试稿子节点生成或修正测试稿；`spec_ref` 与 `test_ref` 都更新后进入 Plan |
 | `writing_plan` | 把 Spec 影响项传给原生 `writing-plans`，形成实现兼容性分析并取得独立 reviewer 的 `Approved`；由 `managing-change-ledger` 原子 `adopt-plan` 成功后进入 TDD 编码 |
 | `tdd_coding` | 正式 Plan 刚采纳时显示 SDD 专用门禁；明确“开启”后先 fetch Plan 指定的远程基线并核对最新完整 SHA，一致后才建立或确认隔离 worktree 并连续执行 SDD；漂移时回到材料、明确“不启动”或尚未选择时不产生执行副作用 |
 | `writing_test` | 仅兼容已有游标或旧回环；修正测试稿后进入验收，不作为新流程默认阶段 |
@@ -346,7 +311,7 @@ python <managing-change-ledger>/scripts/change_ledger.py --config <config-path> 
 
 - 新需求或外部 Bug 反馈已经由需求讨论 Skill 形成并经用户确认“确认结论”：使用 `managing-change-ledger` 登记事件。
 - 当前事件内部验收失败：使用已有失败报告和原 `change_id` 路由，不登记事件。
-- 本次需要创建或修改行为契约：使用 `writing-specs`，并由其测试稿子节点形成或更新同一 `change_id` 的测试稿。
+- 本次需要创建或修改行为契约：已有或明确相关正式材料时，先按 [material-change-assessment.md](references/material-change-assessment.md) 展示并确认修改范围与保留项；然后使用 `writing-specs`，并由其测试稿子节点形成或更新同一 `change_id` 的测试稿。
 - Spec 已确认且需要形成或维护正式 Plan：使用原生 `writing-plans`。
 - 用户要求实际验收：使用 `writing-test-drafts` 的执行模式读取步骤 4 已形成的测试稿；已有 `writing_test` 游标只按兼容路径处理。
 - 验收报告全部通过之后、完成变更事件之前：使用 `writing-final-logic-drafts` 形成并确认 `logic/<change_id>.md`；这不增加 SQLite 阶段或字段。
