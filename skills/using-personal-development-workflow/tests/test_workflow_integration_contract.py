@@ -11,6 +11,7 @@ PACKAGE_ROOT = ROOT.parents[1]
 WORKFLOW = ROOT / "SKILL.md"
 EXECUTION_CONTRACT = ROOT / "references" / "execution-contract.md"
 MATERIAL_CHANGE_ASSESSMENT = ROOT / "references" / "material-change-assessment.md"
+PLAN_BASELINE_SELECTION = ROOT / "references" / "plan-baseline-selection.md"
 EXAMPLE_CONFIG = (
     PACKAGE_ROOT / "examples" / "personal-development-workflow.json.example"
 )
@@ -207,15 +208,50 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         ):
             self.assertIn(required, self.text)
 
-    def test_plan_records_the_reviewed_remote_baseline(self):
+    def test_plan_records_the_confirmed_local_or_remote_baseline(self):
         for required in (
-            "`base_remote`",
-            "`base_branch`",
+            "`base_source`",
+            "`base_locator`",
             "`base_sha`",
             "40 位完整 Git commit SHA",
             "Plan reviewer",
         ):
             self.assertIn(required, self.text)
+
+    def test_plan_lists_local_and_remote_candidates_before_writing(self):
+        self.assertTrue(PLAN_BASELINE_SELECTION.is_file())
+        baseline = PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
+        for required in (
+            "git worktree list --porcelain",
+            "git ls-remote --heads <base_remote> refs/heads/<base_branch>",
+            "`clean/dirty`",
+            "只回复“继续”将采用远程候选",
+            "基线确定前不得创建或重写 Plan",
+        ):
+            self.assertIn(required, baseline)
+
+    def test_local_plan_baseline_does_not_require_remote_equality(self):
+        self.assertTrue(PLAN_BASELINE_SELECTION.is_file())
+        baseline = PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
+        for required in (
+            "可以尚未推送",
+            "不要求等于远程最新 SHA",
+            "不得混入当前脏工作区",
+            "未提交修改不属于任何 SHA",
+            "不执行远程相等性门禁",
+        ):
+            self.assertIn(required, baseline)
+
+    def test_candidate_movement_requires_a_new_selection(self):
+        self.assertTrue(PLAN_BASELINE_SELECTION.is_file())
+        baseline = PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
+        for required in (
+            "远程在等待选择期间移动",
+            "重新执行选择门禁",
+            "本地定位对象已经移动",
+            "重新展示候选",
+        ):
+            self.assertIn(required, baseline)
 
     def test_sdd_fetches_and_resolves_the_plan_branch_before_worktree(self):
         self.assertIn("#### 开发前远程基线门禁", self.text)
@@ -244,12 +280,31 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         ):
             self.assertIn(required, self.text)
 
+    def test_local_baseline_reuses_or_creates_only_an_exact_clean_worktree(self):
+        for required in (
+            "`base_source=local`",
+            "不执行远程 fetch 或远程相等性比较",
+            "`HEAD` 必须逐字等于 `base_sha`",
+            "工作区必须干净",
+            "创建新的隔离 worktree",
+        ):
+            self.assertIn(required, self.text)
+
     def test_sdd_authorization_covers_only_the_scoped_local_fetch(self):
         for required in (
             "第四件本地前置动作",
             "Plan 显示的 `base_remote` 与 `base_branch`",
             "只更新本地 remote-tracking ref",
             "不授权任何远程写入",
+        ):
+            self.assertIn(required, self.execution_contract_text)
+
+    def test_sdd_authorization_is_specific_to_the_selected_baseline_source(self):
+        for required in (
+            "`base_source=remote`",
+            "`base_source=local`",
+            "不授权远程 fetch 或远程相等性比较",
+            "精确显示的本地 `base_sha`",
         ):
             self.assertIn(required, self.execution_contract_text)
 

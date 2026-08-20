@@ -34,19 +34,24 @@ execution_contract:
 
 个人工作流中的固定问题 `是否开启 Subagent-Driven Development 进行开发？`
 是授权提示，不是进度通知。提问前，总控必须显示当前 `plan_ref`、配置中的代码仓库绝对路径，
-Plan 显示的 `base_remote` 与 `base_branch`、评审时的完整 `base_sha`，并说明先 fetch
-并核对最新完整 SHA、一致后才由 `using-git-worktrees` 从该 SHA 创建或确认隔离工作区。
+Plan 显示的 `base_source`、`base_locator` 与评审时的完整 `base_sha`；`base_source=remote`
+时还显示 `base_remote` 与 `base_branch`。同时说明所选来源的验证动作通过后，才由
+`using-git-worktrees` 从该 SHA 创建或确认隔离工作区。
 用户在当前对话中的明确肯定答复同时授权原有三件事：创建或进入
 `using-git-worktrees` 实际返回的隔离 worktree、实现所显示的当前 Plan，以及在其中创建
 当前 Plan 范围内的本地 commits。
 
-同一肯定答复还授权第四件本地前置动作：仅对 Plan 显示的 `base_remote` 与
-`base_branch` 执行一次开发准备 fetch，只更新本地 remote-tracking ref 并解析最新完整
+当 `base_source=remote` 时，同一肯定答复还授权第四件本地前置动作：仅对 Plan 显示的 `base_remote` 与 `base_branch`
+执行一次开发准备 fetch，只更新本地 remote-tracking ref 并解析最新完整
 commit SHA。它在执行顺序中必须先于 worktree 创建或复用；不授权任何远程写入，也不允许
 `pull`、merge 或 reset 主 checkout。fetch 失败或 SHA 漂移时，worktree、编码和 commit
 授权尚不能落到实际执行范围；总控按个人工作流返回材料阶段。
 
-远程基线一致且 worktree 建立后，把 `local_commit_authorized=true` 实例化为：配置中的代码仓库绝对路径、
+当 `base_source=local` 时，同一答复只授权验证精确显示的本地 `base_sha`，以及复用或从该
+SHA 创建干净隔离 worktree；它不授权远程 fetch 或远程相等性比较。定位对象移动、commit
+不存在、HEAD 不相等或 worktree dirty 时，授权尚不能落到编码和 commit 范围，总控返回材料阶段。
+
+所选来源验证通过且 worktree 建立后，把 `local_commit_authorized=true` 实例化为：配置中的代码仓库绝对路径、
 实际返回的隔离 worktree 及其 branch、以及已显示的 Plan/Task 身份。范围不能包含其他仓库、
 workspace、Plan 或 Task。普通“开始开发”、沉默、含糊回答、Plan 批准或持久游标都不是该授权。
 

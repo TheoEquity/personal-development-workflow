@@ -106,14 +106,15 @@ if command 是关闭:
    - Spec 与测试稿引用都更新成功后把阶段设为 `writing_plan`，然后停止。测试稿子节点属于本阶段收尾，不算串行推进另一个阶段。
 
 5. **编写、评审并维护 Plan**
+   - 每次创建或重写正式 Plan 前，必须完整读取并执行 [plan-baseline-selection.md](references/plan-baseline-selection.md)：先发现并展示本地候选与实际远程候选，等待用户选定来源和完整 SHA，再让代码调查、writer 与 reviewer 使用同一 Git tree。基线选择只对本次 Plan 有效；基线确定前不得调查代码、调用 `writing-plans` 或开始评审。
    - **REQUIRED SUB-SKILL:** 使用原生 `writing-plans`，输入已确认的完整 Spec 和全部 `impact_id`、变更事件和当前代码事实；Plan 固定保存为 Spec Vault `plans/<change_id>.md`，不得调用已废弃的两个个人实现/计划 Skill，也不得因任务小或用户催促省略 `plan_ref`。
    - 本阶段以整个工作流任务及其绑定的变更事件为 Plan 边界；多个实现 `Task N` 是同一 Plan 内的执行拆分，不各自取得 Plan、游标或事件身份。并行执行、分模块实现或逐 Task review 都不改变这一边界。
-   - 候选 Plan 必须在具体 Task 前包含 `## 开发基线`，逐行记录 `base_remote`、`base_branch` 和 `base_sha`。`base_remote` 是配置仓库中已存在的 Git remote 名，`base_branch` 是该 remote 上明确选定的基线分支，`base_sha` 是本次代码调查与计划评审实际使用的 40 位完整 Git commit SHA。不得用本地主分支名、remote 默认分支猜测、缩写 SHA 或工作区文件状态代替。Plan reviewer 必须同时收到这三个值、对应仓库绝对路径和相同代码基线；任一字段缺失、引用不存在或评审输入不一致时保持 `writing_plan`，总控不得调用 `adopt-plan`。
+   - 候选 Plan 必须在具体 Task 前包含 `## 开发基线`，逐行记录 `base_source`、`base_locator` 和 `base_sha`；`base_sha` 必须是本次代码调查与计划评审实际使用的 40 位完整 Git commit SHA。远程来源另记 `base_remote` 与 `base_branch`；本地来源记录绝对 worktree、branch/detached、pushed 状态和未提交修改排除说明。不得用缩写 SHA 或工作区文件状态代替。Plan reviewer 必须同时收到这些字段、对应仓库绝对路径和相同代码基线；任一字段缺失、引用不存在或评审输入不一致时保持 `writing_plan`，总控不得调用 `adopt-plan`。
    - 在本次 `writing-plans` 调用要求中附加：候选 Plan 必须在具体 Task 前包含 `## 实现兼容性分析`，逐项记录 Spec `impact_id` 或 `implementation-only`、现有代码或方法、新方案交点、技术影响、处理方式和对应任务。`无影响` 必须给出代码证据并写 `无需任务`；`需要适配`、`需要迁移` 必须映射到编号规范且唯一的真实 `Task N`；Spec 标为 `明确改变` 的每个影响项至少要有一条适配或迁移任务，不能反写成全部无影响；`阻塞` 或待确认项不能采用。Spec 无直接关联项时仍要给出实现层交点结论，或用 ``- 无交点代码证据：<Spec 代码基线> | `<路径或符号>` | <具体理由>`` 记录唯一证据行。该要求只作为调用输入，不改写原生 skill。
    - 完整执行 `writing-plans` 的 `Execution Handoff` 所规定的 Plan 保存与评审合同，并按 `plan-document-reviewer-prompt.md` 传入它要求的全部绝对定位、不可变引用、代码基线、工作区差异和独立 AGENTS 发现信息。把完整影响表以及覆盖、Task 映射和阻塞状态规则作为本次调用的 requirements 输入；该模板仍是 reviewer 字段和判定协议的唯一规范源，本入口不修改模板，只核对结果是否完整一致。原生 Handoff 的通用执行方式二选一提示在个人工作流中由下面的 SDD 专用门禁替代，不提前选择执行器。
    - `Issues Found` 时保持 `writing_plan`；调查或 review 发现用户可观察行为会变化时返回 `writing_spec`，不得由 Plan 自行决定；纯代码、方法或 AGENTS 问题留在 `writing_plan` 重新规划。
    - 只有 reviewer 精确返回 `Approved` 且候选 Plan 已形成有效 `plan_ref` 后，调用 `managing-change-ledger` 的原子命令 `adopt-plan <change_id> --workflow-id <workflow_id> --plan-ref <plan_ref>`。该命令机械解析 Spec 影响项、Plan 兼容性表、覆盖关系、技术状态与真实 Task 引用，不把空洞的 reviewer `Approved` 当作内容校验；成功时只写入 `plan_ref` 并把阶段改为 `tdd_coding`，`change_ref` 保持登记版不变。失败时保留原引用与 `writing_plan`，不得拆成若干 `set-ref` / `workflow-set-stage` 写入。
-   - 只有 `adopt-plan` 成功后，才显示当前 `plan_ref`、配置中的实现仓库绝对路径、Plan 的 `base_remote`、`base_branch`、`base_sha`，以及明确开启后将先 fetch 该远程分支的最新完整 SHA、验证一致后才由 `using-git-worktrees` 从该 SHA 创建或确认隔离 worktree 的说明；同时显示本地 commit 范围和不含远程写入/finishing 的边界，然后逐字询问：**“是否开启 Subagent-Driven Development 进行开发？”** 显示后停止，不得在同一轮 fetch、创建 worktree 或开始编码。
+   - 只有 `adopt-plan` 成功后，才显示当前 `plan_ref`、配置中的实现仓库绝对路径、Plan 的 `base_source`、`base_locator`、`base_sha`，以及所选来源对应的验证和隔离 worktree 说明；同时显示本地 commit 范围和不含远程写入/finishing 的边界，然后逐字询问：**“是否开启 Subagent-Driven Development 进行开发？”** 显示后停止，不得在同一轮 fetch、创建 worktree 或开始编码。
    - reviewer 回复不是第七类正式材料。Plan 批准和 Spec Vault 提交都不授予代码仓库 commit 或集成权限。
 
 6. **正式 TDD 编码**
@@ -122,15 +123,20 @@ if command 是关闭:
    - 用户之后另行明确选择非 SDD 执行方式时，才可使用带独立逐任务 reviewer 的 `executing-plans`，并按该次授权重新实例化执行合同；“不启动 SDD”本身不会自动降级到 `executing-plans`。
 
    #### 开发前远程基线门禁
-   - 用户明确回复“开启”时，该回复按 [execution-contract.md](references/execution-contract.md) 授权当前显示 Plan 的受限本地 fetch、隔离 worktree、编码和范围内本地 commits。开发准备的第一项动作是在配置中的实现仓库核对 Plan 的 `base_remote` 与 `base_branch`；缺失、歧义、remote 不存在或分支不能定位时返回 `writing_plan`，不得猜测 remote 默认分支。
+   - 当 Plan 为 `base_source=remote` 且用户明确回复“开启”时，该回复按 [execution-contract.md](references/execution-contract.md) 授权当前显示 Plan 的受限本地 fetch、隔离 worktree、编码和范围内本地 commits。开发准备的第一项动作是在配置中的实现仓库核对 Plan 的 `base_remote` 与 `base_branch`；缺失、歧义、remote 不存在或分支不能定位时返回 `writing_plan`，不得猜测 remote 默认分支。
    - 核对成功后先运行 `git fetch --no-tags <base_remote> +refs/heads/<base_branch>:refs/remotes/<base_remote>/<base_branch>`，只强制更新该本地 remote-tracking ref；再用 `git rev-parse --verify <base_remote>/<base_branch>^{commit}` 解析最新完整 SHA。fetch、认证、网络、ref 更新或解析失败时保持 `tdd_coding` 并停止；不得创建或复用开发 worktree、不得写 RED、测试或生产代码、不得创建本地 commit。总控不对主 checkout 执行 `git pull`、merge 或 reset。
    - 把最新完整 SHA 与 Plan 的 `base_sha` 逐字比较：
      - 完全一致：才把该 SHA 作为强制 `start_point` 传给 `using-git-worktrees`。创建或确认隔离 worktree 后重新读取其完整 `HEAD`；只有 `HEAD` 等于该 SHA、工作区干净、仓库映射和 AGENTS 清单仍与 Plan 评审输入一致时，远程基线门禁才通过。
      - 不一致：代码门保持关闭，记录 `<base_sha>..<最新 SHA>`，只审查这段远程差异对当前 Spec、Plan 兼容性分析、Task 和 AGENTS 的影响，不默认重写整份材料。至少返回 `writing_plan` 更新 `base_sha`；若差异改变用户可观察行为则先返回 `writing_spec`。候选材料必须按既有最小修改规则重新确认，Plan 重新评审、提交并由 `adopt-plan` 采用后，才能再次展示 SDD 门禁。
    - `using-git-worktrees` 或平台原生 worktree 工具无法保证从强制 `start_point` 创建，或实际 worktree `HEAD`、干净状态、仓库/AGENTS 校验不一致时立即停止。不得退回本地主 checkout、旧 `HEAD`、`FETCH_HEAD` 猜测或“先开发后 rebase”。
 
+   #### 开发前本地基线门禁
+   - 当 Plan 为 `base_source=local` 且用户明确回复“开启”时，不执行远程 fetch 或远程相等性比较；先验证 `base_sha` commit 仍存在，并重新核对 Plan 的绝对 worktree 与 branch/detached 定位对象。定位对象已经移动或 commit 不存在时返回 `writing_plan`，重新执行 Plan 基线选择。
+   - 只有现有隔离 worktree 的 `HEAD` 必须逐字等于 `base_sha`、工作区必须干净，且仓库映射和 AGENTS 清单仍与 Plan reviewer 输入一致时才可复用。否则把该 SHA 作为强制 `start_point` 交给 `using-git-worktrees` 创建新的隔离 worktree，再重复相同验证。
+   - 选中 worktree 内不得带入选择时排除的 dirty 修改。任何校验失败都关闭代码门；不得退回远程 SHA、当前主 checkout 或其他本地 HEAD 猜测继续。
+
    #### SDD 执行
-   - 代码实现开始前，总控必须完成上述远程基线门禁；只有门禁通过后，才使用 `using-git-worktrees` 完成项目设置和干净基线测试。取得实际绝对 worktree 与 branch 后，把它们填入每个 Task 的同一授权合同，重新核对 `spec_ref`、`plan_ref`、`test_ref` 与实现基线，然后启动 `subagent-driven-development`。这之后不再追加一次 fetch、worktree、编码或本地 commit 确认；SDD 按其连续执行规则完成全部 Task 并返回本入口。
+   - 代码实现开始前，总控必须按 `base_source` 完成上述远程或本地基线门禁；只有对应门禁通过后，才使用 `using-git-worktrees` 完成项目设置和干净基线测试。取得实际绝对 worktree 与 branch 后，把它们填入每个 Task 的同一授权合同，重新核对 `spec_ref`、`plan_ref`、`test_ref` 与实现基线，然后启动 `subagent-driven-development`。这之后不再追加一次 fetch、worktree、编码或本地 commit 确认；SDD 按其连续执行规则完成全部 Task 并返回本入口。
    - 进入每个任务前按 [execution-contract.md](references/execution-contract.md) 实例化合同并原样传给所有角色。SDD 门禁的肯定答复使当前 Plan 在实际 worktree 内取得范围准确的本地 commit 授权；其他执行方式只有编码授权时采用未提交路径。合同始终不允许任何 finishing 动作。
    - 使用 `test-driven-development`；该 Skill 是有效 RED 顺序、可复现实现前基线和结构化证据的唯一规范源。路由器只核验其证据并在缺失/无效时停止，不重新定义 RED。
    - `subagent-driven-development` 只能由上述专用门禁的肯定答复启动，并且启动时合同必须允许当前 Plan 在实际 worktree 内 commit。非 SDD 路径仍必须带独立逐任务 reviewer；个人工作流不提供绕过逐任务独立 reviewer 的直接执行路径。所有任务结束后都按合同返回本路由器并停止。
@@ -312,7 +318,7 @@ python <managing-change-ledger>/scripts/change_ledger.py --config <config-path> 
 - 新需求或外部 Bug 反馈已经由需求讨论 Skill 形成并经用户确认“确认结论”：使用 `managing-change-ledger` 登记事件。
 - 当前事件内部验收失败：使用已有失败报告和原 `change_id` 路由，不登记事件。
 - 本次需要创建或修改行为契约：已有或明确相关正式材料时，先按 [material-change-assessment.md](references/material-change-assessment.md) 展示并确认修改范围与保留项；然后使用 `writing-specs`，并由其测试稿子节点形成或更新同一 `change_id` 的测试稿。
-- Spec 已确认且需要形成或维护正式 Plan：使用原生 `writing-plans`。
+- Spec 已确认且需要形成或维护正式 Plan：先执行并确认 [plan-baseline-selection.md](references/plan-baseline-selection.md)，再使用原生 `writing-plans`。
 - 用户要求实际验收：使用 `writing-test-drafts` 的执行模式读取步骤 4 已形成的测试稿；已有 `writing_test` 游标只按兼容路径处理。
 - 验收报告全部通过之后、完成变更事件之前：使用 `writing-final-logic-drafts` 形成并确认 `logic/<change_id>.md`；这不增加 SQLite 阶段或字段。
 - 最终逻辑稿已确认且引用满足完成条件：让最终 `change_ref` 的同一提交包含逻辑稿和完成版 `change.md`，再使用 `managing-change-ledger` 完成事件。
@@ -321,11 +327,11 @@ python <managing-change-ledger>/scripts/change_ledger.py --config <config-path> 
 
 ### 正式 Plan
 
-进入 `writing_plan` 后执行主线步骤 5，并完整遵守 `writing-plans` 的 Plan 保存/评审合同与 `plan-document-reviewer-prompt.md`。本入口把已确认 Spec 的影响项与实现兼容性要求附加到本次 writer/reviewer 输入；`writing-plans` 仍负责候选 Plan 与独立 reviewer 合同，`managing-change-ledger` 的原子 `adopt-plan` 是 Plan 内容校验、`plan_ref` 持久化和阶段推进的唯一合同。本入口不复制两者的字段或判定，也不修改任何 Superpowers 原生文件。采纳成功后的执行选择只使用本 Skill 的 SDD 专用门禁，不显示原生 Handoff 的通用二选一。
+进入 `writing_plan` 后执行主线步骤 5。每次创建或重写 Plan 都先完整执行 [plan-baseline-selection.md](references/plan-baseline-selection.md)，再遵守 `writing-plans` 的 Plan 保存/评审合同与 `plan-document-reviewer-prompt.md`。本入口把已确认 Spec 的影响项、实现兼容性要求和已确认的 `base_source`、`base_locator`、`base_sha` 附加到本次 writer/reviewer 输入；`writing-plans` 仍负责候选 Plan 与独立 reviewer 合同，`managing-change-ledger` 的原子 `adopt-plan` 是 Plan 内容校验、`plan_ref` 持久化和阶段推进的唯一合同。本入口不复制两者的字段或判定，也不修改任何 Superpowers 原生文件。采纳成功后的执行选择只使用本 Skill 的 SDD 专用门禁，不显示原生 Handoff 的通用二选一。
 
 ### 正式编码
 
-进入 `tdd_coding` 后执行主线步骤 6。若 SDD 门禁尚未回答，先显示或恢复“是否开启 Subagent-Driven Development 进行开发？”并停止。明确开启后先 fetch 并验证 Plan 指定远程分支的最新完整 SHA；只有它与 Plan `base_sha` 一致，才把该 SHA 作为 `start_point` 交给 `using-git-worktrees`，再按实际返回的 worktree 实例化合同并启动 SDD。明确不启动时保持停止。授权字段、作用域和执行后停止要求只由 [execution-contract.md](references/execution-contract.md) 定义；有效 RED、豁免和结构化证据只由 `test-driven-development` 定义；实现完成声明只由 `verification-before-completion` 的新鲜证据支持。
+进入 `tdd_coding` 后执行主线步骤 6。若 SDD 门禁尚未回答，先显示或恢复“是否开启 Subagent-Driven Development 进行开发？”并停止。明确开启后按 Plan 的 `base_source` 执行对应基线门禁：远程来源重新 fetch 并验证最新完整 SHA，本地来源验证精确 commit 和干净隔离 worktree；门禁通过后才按实际返回的 worktree 实例化合同并启动 SDD。明确不启动时保持停止。授权字段、作用域和执行后停止要求只由 [execution-contract.md](references/execution-contract.md) 定义；有效 RED、豁免和结构化证据只由 `test-driven-development` 定义；实现完成声明只由 `verification-before-completion` 的新鲜证据支持。
 
 返回本入口后，严格按主线步骤 6 判断：未获得范围准确的本地 commit 授权就保留相关未提交代码并停在 `tdd_coding`；形成并核验授权 commit 后，从实际 worktree 解析并更新 `code_ref`、从 `tdd_coding` 直接进入 `acceptance` 并停止。
 
@@ -353,7 +359,7 @@ python <managing-change-ledger>/scripts/change_ledger.py --config <config-path> 
 
 当当前阶段为 `tdd_coding` 时，状态卡还必须显示按 [execution-contract.md](references/execution-contract.md) 实例化的原样合同，以及 `test-driven-development` 证据门禁状态。合同不允许 commit 且存在相关未提交实现时，阶段状态写“待授权提交”，不能宣称已有 `code_ref`。
 
-正式 Plan 刚采纳且 SDD 门禁尚未回答时，状态卡还显示 Plan 的 `base_remote`、`base_branch`、`base_sha`，阶段状态写“等待 SDD 选择”，下一步逐字写“是否开启 Subagent-Driven Development 进行开发？”。用户明确不启动后写“SDD 未启动”，不得暗示已经 fetch、创建 worktree 或开始实现。
+正式 Plan 刚采纳且 SDD 门禁尚未回答时，状态卡还显示 Plan 的 `base_source`、`base_locator`、`base_sha`；远程来源同时显示 `base_remote`、`base_branch`。阶段状态写“等待 SDD 选择”，下一步逐字写“是否开启 Subagent-Driven Development 进行开发？”。用户明确不启动后写“SDD 未启动”，不得暗示已经 fetch、创建 worktree 或开始实现。
 
 ## 停止信号
 
@@ -379,7 +385,8 @@ python <managing-change-ledger>/scripts/change_ledger.py --config <config-path> 
 - 正准备在 Plan 尚未进入可复现的 Spec Vault Git commit、`plan_ref` 尚未更新时进入编码；
 - 正准备在独立计划 reviewer 尚未返回 `Approved`，或 `managing-change-ledger adopt-plan` 尚未原子成功时，把 `writing_plan` 改为 `tdd_coding`；
 - 正准备在 SDD 专用门禁得到明确肯定答复前创建 worktree、启动 `subagent-driven-development`、修改代码或创建本地 commit；
-- 正准备在 Plan 缺少 `base_remote`、`base_branch` 或 40 位完整 `base_sha` 时猜测远程基线并开始开发；
+- 正准备在 Plan 缺少 `base_source`、`base_locator` 或 40 位完整 `base_sha` 时猜测基线并开始开发；
+- 正准备在创建或重写 Plan 前省略本地/远程候选卡、默认使用尚未展示的远程候选，或把 dirty 修改算入某个 SHA；
 - 正准备在 fetch 和最新完整 SHA 核对完成前创建或复用开发 worktree、写 RED/测试/生产代码，或创建本地 commit；
 - 远程最新 SHA 与 Plan `base_sha` 不一致，却正准备沿用旧批准、先开发后 rebase，或不经材料更新、重新评审与 `adopt-plan` 就继续；
 - 正准备把普通“开始开发”、沉默、含糊答复或“不启动 SDD”解释成 SDD/commit 授权，或自动降级到 `executing-plans`；
