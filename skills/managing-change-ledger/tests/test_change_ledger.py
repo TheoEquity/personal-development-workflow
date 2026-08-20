@@ -39,7 +39,7 @@ class LedgerTests(unittest.TestCase):
             self.repo / "tests/AGENTS.md",
         )
         self.agents_inventory = ";".join(
-            f"{path}@{hashlib.sha256(path.read_bytes()).hexdigest()}"
+            f"{path.resolve()}@{hashlib.sha256(path.read_bytes()).hexdigest()}"
             for path in self.agent_paths
         )
         (self.vault / "changes/CE-0001").mkdir()

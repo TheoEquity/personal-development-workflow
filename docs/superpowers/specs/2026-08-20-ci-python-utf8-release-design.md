@@ -11,6 +11,11 @@ logic and assertions were not the source of the failure.
 The `v1.1.0` tag is already public and must not be moved or overwritten. No
 GitHub Release was created for it.
 
+After the UTF-8 failures were removed, the Windows runner exposed one
+independent test-portability mismatch: production inventories resolve
+`AGENTS.md` paths, while the test expected the lexical temporary-directory
+path. Windows represented those equivalent paths through long and 8.3 aliases.
+
 ## Decision
 
 Make the repository's canonical test entry point explicitly enable Python UTF-8
@@ -21,6 +26,11 @@ contract without changing the ledger CLI's JSON format or runtime behavior.
 Add a package-contract regression test that reads the real test entry point and
 requires the UTF-8 setting. The test must fail before the script change and pass
 after it.
+
+Keep the production AGENTS inventory contract unchanged. Make its existing test
+derive expected path identities with the same `Path.resolve()` normalization
+that the production inventory applies, so equivalent Windows long and 8.3 path
+aliases do not create a false failure.
 
 ## Alternatives Considered
 
@@ -33,10 +43,12 @@ after it.
 
 ## Scope and Verification
 
-Only `tests/test_package_contract.py` and `scripts/test.ps1` are implementation
-inputs. After the RED/GREEN cycle, run the complete `scripts/test.ps1` suite and
-Python compilation checks. Then fast-forward `main`, create the annotated
-`v1.1.1` tag, atomically push `main` and that tag, and wait for the corresponding
-GitHub Actions run before creating the `v1.1.1` Release.
+Implementation inputs are `tests/test_package_contract.py`, `scripts/test.ps1`,
+and the existing Windows-portability expectation in
+`skills/managing-change-ledger/tests/test_change_ledger.py`. After the RED/GREEN
+cycle, run the complete `scripts/test.ps1` suite and Python compilation checks.
+Then fast-forward `main`, create the next unused annotated patch tag, atomically
+push `main` plus the tag, and wait for the corresponding GitHub Actions run
+before creating the GitHub Release.
 
-The existing `v1.1.0` tag remains unchanged and has no Release entry.
+The existing failed-candidate tags remain unchanged and have no Release entry.

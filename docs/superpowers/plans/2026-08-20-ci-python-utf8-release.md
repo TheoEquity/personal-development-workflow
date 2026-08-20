@@ -14,8 +14,8 @@
 
 - Do not change the ledger CLI JSON format or runtime output behavior.
 - Do not move or overwrite the public `v1.1.0` tag.
-- Limit implementation changes to `tests/test_package_contract.py` and `scripts/test.ps1`.
-- Publish the verified fix as annotated tag and GitHub Release `v1.1.1`.
+- Limit implementation changes to the UTF-8 entry point/tests and the existing AGENTS inventory test expectation.
+- Do not rewrite failed-candidate tags; publish the verified fix under the next unused patch version.
 
 ---
 
@@ -116,9 +116,49 @@ git add -- tests/test_package_contract.py scripts/test.ps1 docs/superpowers/plan
 git commit -m "fix: force utf8 for Windows test runs"
 ```
 
-- [ ] **Step 7: Publish without rewriting `v1.1.0`**
+- [ ] **Step 7: Publish without rewriting a failed-candidate tag**
 
 Fast-forward local `main` to the verified implementation commit, create
-annotated tag `v1.1.1`, atomically push `main` plus the tag, wait for GitHub
-Actions on the new commit, and create the `v1.1.1` GitHub Release only after
-the run succeeds.
+the next unused annotated patch tag, atomically push `main` plus the tag, wait
+for GitHub Actions on the new commit, and create the matching GitHub Release
+only after the run succeeds.
+
+### Task 2: Normalize the Windows AGENTS Inventory Expectation
+
+**Files:**
+- Test: `skills/managing-change-ledger/tests/test_change_ledger.py`
+
+**Interfaces:**
+- Consumes: production AGENTS inventory entries formatted as `<resolved-path>@<sha256>`.
+- Produces: a platform-portable expected inventory using the same resolved path identity.
+
+- [ ] **Step 1: Record the target-environment RED**
+
+Use the failed GitHub Windows run where production emitted the resolved
+`<short-windows-temp-path>` identity while the test expected the equivalent
+lexical `<long-windows-temp-path>` identity. The content hashes must be
+identical.
+
+- [ ] **Step 2: Normalize the expected paths**
+
+Build each expected inventory entry with `path.resolve()` while retaining the
+existing SHA-256 calculation:
+
+```python
+f"{path.resolve()}@{hashlib.sha256(path.read_bytes()).hexdigest()}"
+```
+
+- [ ] **Step 3: Run the focused ledger test**
+
+```powershell
+python -B -m unittest discover -s skills/managing-change-ledger/tests -p "test_change_ledger.py" -k "test_adopt_plan_keeps_registration_change_ref_and_reports_agents" -v
+```
+
+Expected: PASS locally; the next GitHub Windows run must also pass without a
+long-path versus 8.3-alias mismatch.
+
+- [ ] **Step 4: Re-run the complete release verification**
+
+Run `./scripts/test.ps1`, commit only the documented files, create the next
+unused annotated patch tag without moving `v1.1.0` or `v1.1.1`, and create the
+GitHub Release only after CI succeeds.
