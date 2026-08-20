@@ -117,6 +117,8 @@ Spec 和测试稿就绪后，每次创建 Plan 或形成新的 `plan_ref` 都先
 
 选择后才使用外部原生 `writing-plans` 形成 Plan。Plan 必须记录 `base_source`、`base_locator` 和评审代码所用的 40 位完整 `base_sha`；远程来源还记录 `base_remote` 与 `base_branch`。Plan 经过独立 reviewer 后，由 `managing-change-ledger adopt-plan` 原子安装新的 `plan_ref`；只有采用成功后才进入 `tdd_coding`。
 
+同一轮并行处理多个 Bug 时，候选选择提升为整轮共用的一张卡片和一次选择，而不是强制远程：第一轮目标分支头、已有开放 MR 时的 MR 实际源分支头只是远程候选；相关本地 commit 仍作为本地候选展示。整轮明确选择本地后，每个 Bug Plan 记录相同的 `base_source=local`、来源定位和完整 `base_sha`，每个独立 Worktree 都从该 SHA 创建；该 commit 可以尚未推送，也不执行远程相等性比较。只回复“继续”仍选择卡片中的唯一远程候选。
+
 进入编码前，总控必须逐字询问：
 
 > 是否开启 Subagent-Driven Development 进行开发？

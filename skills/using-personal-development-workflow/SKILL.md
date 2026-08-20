@@ -207,10 +207,11 @@ Spec 与测试稿 → Plan → TDD 编码 → 内部验收 → 独立验收报�
 #### Bug 会话与共同基线
 
 1. 跨 Bug 并行使用不同的 Codex 顶层会话和不同的 Git Worktree。每个 Bug 独立开启或恢复个人工作流，并使用自己的 `change_id`、`workflow_id`、Spec、Plan、分支和 `code_ref`；一个 Bug 事件完成后仍保持不可变。
-2. 一轮开始前只解析一次共同基线。第一轮使用目标远程分支最新的 40 位完整 SHA；已有开放 MR 时，使用该 MR 实际源分支头的 40 位完整 SHA。把它原样写入本轮每个 Bug Plan 的 `base_sha`，同一轮所有 Bug 的 `base_sha` 必须逐字相同。
-3. 每个 Bug Worktree 都从该冻结 SHA 创建并验证。不得把另一个 Bug Worktree 的目录状态或可变 HEAD 作为基线，也不得因为先完成一个 Bug 就让同轮其他 Bug 改为链式基线。
-4. 跨 Bug 并行不得由 `subagent-driven-development` 的 Subagent 代替；单个 Bug 会话仍逐字显示既有 SDD 门禁，SDD 授权只覆盖当前 Bug 的 Plan。
-5. 每个 Bug 会话独立完成 TDD、验收和事件关闭，只向集线会话交付用户明确指定的 `change_id`、本地分支、完整 commit SHA、`code_ref` 和验证结论；Bug 会话不自行创建另一个最终 MR。
+2. 一轮开始前完整执行 [plan-baseline-selection.md](references/plan-baseline-selection.md)，建立一张整轮共用的**共同基线候选卡**并在本轮只选择一次；仍展示相关本地候选与一个实际远程候选。第一轮的远程候选是目标远程分支最新的 40 位完整 SHA；已有开放 MR 时，远程候选是该 MR 实际源分支头的 40 位完整 SHA。候选卡明确写明只回复“继续”将采用远程候选；用户明确选择本地候选时使用本地。
+3. 把选定结果原样写入本轮每个 Bug Plan；同一轮所有 Bug 的 `base_source` 和 `base_sha` 必须逐字相同，`base_locator` 也必须指向同一个选定来源。本地共同基线可以尚未推送，并按通用本地来源规则不执行远程相等性比较。该专门规则只把基线选择范围提升到整轮并增加跨 Plan 一致性约束，不得覆盖通用的本地/远程来源语义。
+4. 每个 Bug Worktree 都从该冻结 SHA 创建并验证。不得把另一个 Bug Worktree 的目录状态或可变 HEAD 作为基线，也不得因为先完成一个 Bug 就让同轮其他 Bug 改为链式基线。
+5. 跨 Bug 并行不得由 `subagent-driven-development` 的 Subagent 代替；单个 Bug 会话仍逐字显示既有 SDD 门禁，SDD 授权只覆盖当前 Bug 的 Plan。
+6. 每个 Bug 会话独立完成 TDD、验收和事件关闭，只向集线会话交付用户明确指定的 `change_id`、本地分支、完整 commit SHA、`code_ref` 和验证结论；Bug 会话不自行创建另一个最终 MR。
 
 #### 集线会话与同一开放 MR
 
