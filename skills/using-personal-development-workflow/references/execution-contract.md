@@ -1,8 +1,9 @@
 # Execution Contract
 
 This file is the canonical definition of `authorization_offer` and
-`execution_contract`. Read it before dispatching or reviewing implementation
-work. Callers reference this file; they do not redefine either object.
+`execution_contract`. Read it before dispatching an implementation coordinator
+or any implementation/review role. Callers reference this file; they do not
+redefine either object.
 
 `authorization_offer` is the immutable object displayed before the
 personal-workflow SDD question. It describes exactly what a positive answer
@@ -187,9 +188,13 @@ finishing 边界。任何比较失败、来源验证失败或 worktree 创建失
 已经完成，这些操作仍需要之后单独明确授权。
 
 Pass the accepted normalized offer and exact serialized contract unchanged to
-every executor, implementer, fixer, task reviewer, and uncommitted-change
-reviewer. A recipient repeats the field comparison and must stop when either
-object is absent, altered, internally inconsistent, or too narrow for
+the personal-workflow implementation coordinator. The coordinator repeats the
+field comparison before invoking SDD and passes both objects unchanged to every
+executor, implementer, fixer, task reviewer, and uncommitted-change reviewer.
+The coordinator is an orchestration role, not an additional authority source:
+it cannot add a repository, widen the Plan/tasks, change TDD or commit scope, or
+enable finishing. Every recipient repeats the comparison and must stop when
+either object is absent, altered, internally inconsistent, or too narrow for
 discovered work. Reviewers independently fail the scope gate when a change or
 commit falls outside the contract.
 

@@ -13,8 +13,18 @@ WORKFLOW = ROOT / "SKILL.md"
 EXECUTION_CONTRACT = ROOT / "references" / "execution-contract.md"
 MATERIAL_CHANGE_ASSESSMENT = ROOT / "references" / "material-change-assessment.md"
 PLAN_BASELINE_SELECTION = ROOT / "references" / "plan-baseline-selection.md"
-EXAMPLE_CONFIG = (
-    PACKAGE_ROOT / "examples" / "personal-development-workflow.json.example"
+PLAN_REVIEW_CONTRACT = ROOT / "references" / "plan-review-contract.md"
+STAGE_REFERENCES = tuple(
+    ROOT / "references" / name
+    for name in (
+        "requirement-discussion.md",
+        "change-registration.md",
+        "spec-stage.md",
+        "plan-stage.md",
+        "implementation-stage.md",
+        "acceptance-stage.md",
+        "integration-and-cleanup.md",
+    )
 )
 LEDGER_SCRIPT = (
     PACKAGE_ROOT
@@ -28,18 +38,41 @@ LEDGER_SCRIPT = (
 class WorkflowIntegrationContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text = WORKFLOW.read_text(encoding="utf-8")
+        cls.workflow_text = WORKFLOW.read_text(encoding="utf-8")
+        cls.stage_texts = {
+            path.name: path.read_text(encoding="utf-8") for path in STAGE_REFERENCES
+        }
+        cls.text = "\n".join((cls.workflow_text, *cls.stage_texts.values()))
         cls.execution_contract_text = EXECUTION_CONTRACT.read_text(encoding="utf-8")
         cls.material_change_assessment_text = MATERIAL_CHANGE_ASSESSMENT.read_text(
             encoding="utf-8"
         )
+        cls.plan_review_contract_text = PLAN_REVIEW_CONTRACT.read_text(encoding="utf-8")
 
     def test_plan_review_protocol_has_one_normative_source(self):
-        self.assertIn("`writing-plans` 的 `Execution Handoff`", self.text)
+        self.assertIn("[plan-review-contract.md](references/plan-review-contract.md)", self.text)
         self.assertIn("`plan-document-reviewer-prompt.md`", self.text)
         self.assertNotIn("plan-adoption-proof:start", self.text)
         self.assertIn("`managing-change-ledger`", self.text)
         self.assertIn("`adopt-plan`", self.text)
+
+    def test_plan_review_contract_separates_mechanical_and_semantic_review(self):
+        for required in (
+            "adopt-plan --dry-run 机械校验",
+            "只有标准输出返回 `status=validated` 才能派发语义 reviewer",
+            "错误方案",
+            "缺失行为",
+            "不可实现接口",
+            "首次评审：15 分钟",
+            "第一次复审：10 分钟",
+            "第二次复审仍使用同一 reviewer",
+            "第二次复审仍出现此前未报告的新架构问题时停止补丁循环",
+            "spike_required",
+        ):
+            self.assertIn(required, self.plan_review_contract_text)
+
+        self.assertIn("只检查修改区、此前阻断项", self.plan_review_contract_text)
+        self.assertIn("不修改 SQLite", self.plan_review_contract_text)
 
     def test_change_document_is_written_only_at_registration_and_completion(self):
         self.assertIn("登记时创建一次、完成时更新一次", self.text)
@@ -88,7 +121,7 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             self.assertIn(required, self.text)
 
         writer = self.text.index("`writing-final-logic-drafts`")
-        completion = self.text.index("**完成变更事件**")
+        completion = self.text.index("## 完成变更事件")
         self.assertLess(writer, completion)
 
     def test_impact_range_definition_is_not_duplicated(self):
@@ -96,9 +129,11 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         self.assertNotIn("`可能修改 / 可能新增 / 需要核对`", self.text)
 
     def test_execution_contract_and_finishing_are_stop_signals_not_copies(self):
-        self.assertNotIn("execution_contract:", self.text)
-        self.assertNotIn("tdd_evidence:", self.text)
-        self.assertLessEqual(self.text.count("`finishing-a-development-branch`"), 2)
+        self.assertNotIn("execution_contract:", self.workflow_text)
+        self.assertNotIn("tdd_evidence:", self.workflow_text)
+        self.assertLessEqual(
+            self.workflow_text.count("`finishing-a-development-branch`"), 2
+        )
 
     def test_plan_approval_has_a_preimplementation_drift_boundary(self):
         self.assertIn("代码实现开始前", self.text)
@@ -110,6 +145,22 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
 
     def test_superpowers_originals_are_read_only_dependencies(self):
         self.assertIn("Superpowers 原生技能是只读依赖", self.text)
+
+    def test_requirement_discussion_waits_for_the_final_overall_solution(self):
+        for required in (
+            "最终总体方案（需求层）",
+            "完整打印",
+            "阶段状态：等待确认",
+            "确认前保持 `current_stage=requirement_discussion`",
+            "已确认的最终总体方案",
+        ):
+            self.assertIn(required, self.text)
+
+        self.assertIn(
+            "确认后才把 `current_stage` 更新为 `register_change`",
+            self.text,
+        )
+        self.assertNotIn("确认结论，随后进入 Spec；不进总账", self.text)
 
     def test_controller_discovers_the_nearest_project_configuration_only(self):
         removed_user_default = "~/" + ".codex/personal-development-workflow/config.json"
@@ -124,15 +175,14 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         self.assertIn("没有全局配置 fallback", self.text)
 
     def test_current_project_configuration_binds_formal_materials_to_repository(self):
-        self.assertTrue(EXAMPLE_CONFIG.is_file(), EXAMPLE_CONFIG)
-        config = json.loads(EXAMPLE_CONFIG.read_text(encoding="utf-8"))
-
-        self.assertEqual(config["spec_vault"], "<absolute-project-spec-vault-path>")
-        self.assertEqual(config["database"], "<absolute-project-spec-vault-path>/.local/personal-workflow.sqlite3")
-        self.assertEqual(
-            config["repositories"],
-            {"example-repository": "<absolute-code-repository-path>"},
-        )
+        for required in (
+            "`spec_vault`",
+            "`database`",
+            "`repositories`",
+            "已确认的绝对路径",
+            "database 必须位于其 `.local`",
+        ):
+            self.assertIn(required, self.workflow_text)
 
     def test_project_configuration_initializes_the_git_ignored_local_ledger(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -198,19 +248,23 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         self.assertIn("带独立逐任务 reviewer 的 `executing-plans`", self.text)
 
     def test_adopted_plan_stops_at_the_explicit_sdd_handoff(self):
+        planning = self.stage_texts["plan-stage.md"]
+        implementation = self.stage_texts["implementation-stage.md"]
         for required in (
             "是否开启 Subagent-Driven Development 进行开发？",
-            "只有 `adopt-plan` 成功后",
             "用户明确回复“开启”",
-            "使用 `using-git-worktrees`",
+            "`using-git-worktrees`",
             "启动 `subagent-driven-development`",
             "用户明确回复“不启动”",
             "不创建 worktree、不修改代码、不创建本地 commit",
         ):
-            self.assertIn(required, self.text)
-        self.assertIn("只回复“继续”不算明确开启 SDD", self.text)
+            self.assertIn(required, implementation + self.workflow_text)
+        self.assertIn("采用成功后立即停止", planning)
+        self.assertIn("下一轮", planning)
+        self.assertIn("只回复“继续”不算明确开启 SDD", implementation)
 
     def test_plan_records_the_confirmed_local_or_remote_baseline(self):
+        baseline = PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
         for required in (
             "`base_source`",
             "`base_locator`",
@@ -218,7 +272,7 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             "40 位完整 Git commit SHA",
             "Plan reviewer",
         ):
-            self.assertIn(required, self.text)
+            self.assertIn(required, self.text + baseline)
 
     def test_plan_lists_local_and_remote_candidates_before_writing(self):
         self.assertTrue(PLAN_BASELINE_SELECTION.is_file())
@@ -227,7 +281,12 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             "git worktree list --porcelain",
             "git ls-remote --heads <base_remote> refs/heads/<base_branch>",
             "`clean/dirty`",
-            "只回复“继续”将采用远程候选",
+            "本轮共同基线",
+            "集线绿色 HEAD",
+            "已完成事件 `code_ref`",
+            "远端目标分支 HEAD",
+            "禁止仍在开发中的需求分支",
+            "接受推荐",
             "基线确定前不得创建或重写 Plan",
         ):
             self.assertIn(required, baseline)
@@ -312,10 +371,11 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             self.assertIn(required, baseline)
 
     def test_sdd_fetches_and_resolves_the_plan_branch_before_worktree(self):
-        self.assertIn("#### 开发前远程基线门禁", self.text)
-        gate_start = self.text.index("#### 开发前远程基线门禁")
-        gate_end = self.text.index("####", gate_start + 5)
-        gate = self.text[gate_start:gate_end]
+        implementation = self.stage_texts["implementation-stage.md"]
+        self.assertIn("## 开发前远程基线门禁", implementation)
+        gate = implementation.split("## 开发前远程基线门禁", 1)[1].split(
+            "## 开发前本地基线门禁", 1
+        )[0]
 
         for required in (
             "第一项动作",
@@ -350,11 +410,10 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             self.assertIn(required, self.text)
 
     def test_status_and_stop_rules_branch_on_the_selected_baseline_source(self):
-        for required in (
-            "按 Plan 的 `base_source` 执行对应基线门禁",
-            "仅当 `base_source=remote` 时",
-        ):
-            self.assertIn(required, self.text)
+        implementation = self.stage_texts["implementation-stage.md"]
+        self.assertIn("按 Plan 的 `base_source` 重新核对基线", implementation)
+        self.assertIn("仅当 `base_source=remote` 且", implementation)
+        self.assertIn("仅当 `base_source=local` 且", implementation)
 
     def test_sdd_authorization_covers_only_the_scoped_local_fetch(self):
         for required in (
@@ -405,12 +464,13 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             ),
         )
 
-        planning = self.text.split("5. **编写、评审并维护 Plan**", 1)[1].split(
-            "6. **正式 TDD 编码**", 1
-        )[0]
+        planning = self.stage_texts["plan-stage.md"]
+        implementation = self.stage_texts["implementation-stage.md"]
+        self.assertNotIn("authorization_offer:", planning)
+        self.assertIn("采用成功后立即停止", planning)
         self.assertLess(
-            planning.index("`authorization_offer`"),
-            planning.index("是否开启 Subagent-Driven Development 进行开发？"),
+            implementation.index("`authorization_offer`"),
+            implementation.index("是否开启 Subagent-Driven Development 进行开发？"),
         )
 
     def test_offer_and_execution_contract_have_exact_canonical_key_sets(self):
@@ -437,7 +497,8 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             ],
         )
         self.assertNotRegex(offer_block, r"^  base_(remote|branch|worktree):")
-        self.assertIn("不增加同名顶层字段", self.text)
+        self.assertIn("不是 offer 顶层字段", self.execution_contract_text)
+        self.assertIn("`workspace_or_branch` 是派生时唯一新增的字段", self.execution_contract_text)
 
         contract_block = self.execution_contract_text.split(
             "execution_contract:\n", 1
@@ -507,15 +568,15 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             self.assertIn(required, self.text)
 
     def test_one_plan_maps_to_one_workflow_change_and_can_hold_many_tasks(self):
+        planning = self.stage_texts["plan-stage.md"]
         for required in (
-            "一份正式 Plan 对应一个个人工作流任务",
-            "一个工作流游标绑定的一个变更事件",
-            "Plan 内部可以拆分为多个实现 `Task N`",
-            "不得为单个实现 Task 新建 Plan、工作流游标或变更事件",
+            "一个工作流任务始终只对应一份 Plan",
+            "Plan 内可以有多个 `Task N`",
+            "不得为实现 Task 新建 Plan、游标或事件",
             "仍更新 `plans/<change_id>.md`",
             "新的完整 Git SHA",
         ):
-            self.assertIn(required, self.text)
+            self.assertIn(required, planning)
 
     def test_spec_phase_creates_test_draft_before_plan(self):
         self.assertIn("`writing-specs` 调用 `writing-test-drafts`", self.text)
@@ -528,12 +589,14 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         self.assertIn("Git common directory", self.text)
 
     def test_spec_impacts_are_passed_into_plan_and_review_requirements(self):
-        self.assertIn("完整 Spec 和全部 `impact_id`", self.text)
-        self.assertIn("`## 实现兼容性分析`", self.text)
-        self.assertIn("作为本次调用的 requirements 输入", self.text)
-        self.assertIn("覆盖、Task 映射和阻塞状态", self.text)
-        self.assertIn("Spec 标为 `明确改变`", self.text)
-        self.assertIn("至少要有一条适配或迁移任务", self.text)
+        planning = self.stage_texts["plan-stage.md"]
+        combined = planning + self.plan_review_contract_text
+        self.assertIn("完整 Spec 和全部 `impact_id`", planning)
+        self.assertIn("`## 实现兼容性分析`", planning)
+        self.assertIn("需求输入", planning)
+        self.assertIn("覆盖关系、技术状态和真实 Task 映射", combined)
+        self.assertIn("Spec 标为 `明确改变`", planning)
+        self.assertIn("适配或迁移任务", planning)
 
     def test_plan_behavior_change_returns_to_spec(self):
         self.assertIn("返回 `writing_spec`", self.text)
@@ -658,59 +721,51 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         ):
             self.assertIn(required, assessment)
 
-    def test_parallel_bug_chats_share_one_frozen_git_baseline(self):
-        self.assertIn("### 跨 Bug 并行与持续 MR 集线", self.text)
-        section_start = self.text.index("### 跨 Bug 并行与持续 MR 集线")
-        section_end = self.text.index("### 阶段与 Skill 对应", section_start)
-        section = self.text[section_start:section_end]
+    def test_parallel_requirements_share_one_frozen_git_baseline(self):
+        section = (
+            self.stage_texts["integration-and-cleanup.md"]
+            + PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
+        )
 
         for required in (
-            "不同的 Codex 顶层会话和不同的 Git Worktree",
-            "自己的 `change_id`、`workflow_id`、Spec、Plan、分支和 `code_ref`",
-            "同一轮所有 Bug 的 `base_source` 和 `base_sha` 必须逐字相同",
-            "不得把另一个 Bug Worktree 的目录状态或可变 HEAD 作为基线",
-            "MR 实际源分支头的 40 位完整 SHA",
-            "本轮开始后冻结集线分支",
-            "跨 Bug 并行不得由 `subagent-driven-development` 的 Subagent 代替",
-            "SDD 授权只覆盖当前 Bug 的 Plan",
+            "每个需求都保留自己的 `change_id`",
+            "需求分支、隔离 worktree、正式材料和 `code_ref`",
+            "同一轮默认共享已经冻结的 `base_source`、`base_locator` 和 `base_sha`",
+            "禁止仍在开发中的需求分支",
+            "另一个进行中需求的分支",
+            "每个需求仍创建自己的隔离 worktree",
         ):
             self.assertIn(required, section)
 
-    def test_parallel_bug_round_selects_one_local_or_remote_common_baseline(self):
-        section_start = self.text.index("### 跨 Bug 并行与持续 MR 集线")
-        section_end = self.text.index("### 阶段与 Skill 对应", section_start)
-        section = self.text[section_start:section_end]
+    def test_parallel_requirement_round_selects_one_common_baseline(self):
+        section = PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
 
         for required in (
             "共同基线候选卡",
-            "本轮只选择一次",
-            "同一轮所有 Bug 的 `base_source` 和 `base_sha` 必须逐字相同",
-            "明确选择本地候选",
+            "等待一次选择",
+            "相同的 `base_source`、`base_locator` 和 40 位完整 `base_sha`",
+            "明确选择另一个已展示稳定候选",
             "本地共同基线可以尚未推送",
-            "不执行远程相等性比较",
-            "只回复“继续”将采用远程候选",
-            "只把基线选择范围提升到整轮",
-            "不得覆盖通用的本地/远程来源语义",
+            "本地来源不执行远程 fetch 或远程相等性比较",
+            "只回复“继续”时接受推荐",
+            "只把通用基线选择的范围提升到整轮",
+            "不改变本地/远程候选",
         ):
             self.assertIn(required, section)
 
     def test_one_hub_chat_updates_the_same_open_mr(self):
-        self.assertIn("### 跨 Bug 并行与持续 MR 集线", self.text)
-        section_start = self.text.index("### 跨 Bug 并行与持续 MR 集线")
-        section_end = self.text.index("### 阶段与 Skill 对应", section_start)
-        section = self.text[section_start:section_end]
+        section = self.stage_texts["integration-and-cleanup.md"]
 
         for required in (
-            "一个开放 MR 只由一个长期集线会话独占其源分支和 Worktree",
-            "工作流已经完成的 Bug 分支",
+            "开放 MR 只有一个集线会话独占其源分支",
+            "一个集线分支/worktree 覆盖一次本地交付周期",
             "git merge --no-ff",
-            "每个 Bug `code_ref` 的 commit 都是集线头的祖先",
+            "`code_ref` 是集线 HEAD 的祖先",
             "组合验证",
-            "push 同一源分支",
+            "push 同一实际源分支",
             "不得新建重复 MR",
             "MR 已合并或关闭",
-            "不新增 SQLite 表、字段、阶段或正式材料引用",
-            "Superpowers 原生 Skill 保持只读",
+            "不新增 SQLite 阶段、表、字段或正式材料类型",
         ):
             self.assertIn(required, section)
 
