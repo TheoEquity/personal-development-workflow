@@ -221,19 +221,56 @@ class StageWorkerHandoffTests(unittest.TestCase):
         handoff_path = Path(result["handoff_path"])
         self.assertTrue(handoff_path.is_file())
         self.assertEqual(
-            handoff_path.parent.parent,
-            self.vault
-            / ".local"
-            / "stage-workers"
-            / "WF-001"
-            / "CE-0006"
-            / "writing_spec",
+            handoff_path.parent.parent.resolve(),
+            (
+                self.vault
+                / ".local"
+                / "stage-workers"
+                / "WF-001"
+                / "CE-0006"
+                / "writing_spec"
+            ).resolve(),
         )
         self.assertTrue(handoff_path.parent.name.startswith("run-"))
         payload = json.loads(handoff_path.read_text(encoding="utf-8"))
         self.assertEqual(payload["status"], "initialized")
         self.assertEqual(payload["role"], "spec_worker")
         self.assertEqual(payload["candidate_path"], str(handoff_path.parent / "candidate.md"))
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows path aliases only")
+    def test_implementation_accepts_equivalent_windows_repository_aliases(self):
+        module = load_module()
+        inputs = self.inputs("implementation", "d")
+        alias = str(self.repository).swapcase()
+        offer = json.loads(inputs["authorization_offer"])
+        contract = json.loads(inputs["execution_contract"])
+        offer["repository"] = alias
+        contract["local_commit_scope"]["repositories"] = [alias]
+        inputs["authorization_offer"] = json.dumps(
+            offer, sort_keys=True, separators=(",", ":")
+        )
+        inputs["execution_contract"] = json.dumps(
+            contract, sort_keys=True, separators=(",", ":")
+        )
+
+        result = module.init_handoff(
+            self.config,
+            workflow_id="WF-001",
+            change_id="CE-0006",
+            stage="implementation",
+            role="implementation_coordinator",
+            input_refs=inputs,
+        )
+        payload = json.loads(Path(result["handoff_path"]).read_text(encoding="utf-8"))
+        normalized_offer = json.loads(payload["input_refs"]["authorization_offer"])
+        normalized_contract = json.loads(payload["input_refs"]["execution_contract"])
+        canonical_repository = str(self.repository.resolve())
+
+        self.assertEqual(normalized_offer["repository"], canonical_repository)
+        self.assertEqual(
+            normalized_contract["local_commit_scope"]["repositories"],
+            [canonical_repository],
+        )
 
     def test_validate_rejects_another_event_stage_role_or_input_ref(self):
         module = load_module()
