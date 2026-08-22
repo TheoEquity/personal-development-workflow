@@ -404,8 +404,15 @@ def _normalize_authority_objects(
     scope_keys = {"repositories", "workspace_or_branch", "plan_or_tasks"}
     if not isinstance(scope, dict) or set(scope) != scope_keys:
         raise ContractError("execution_contract.local_commit_scope has an invalid field set")
-    if scope["repositories"] != [str(repository)]:
+    repositories = scope["repositories"]
+    if not isinstance(repositories, list) or len(repositories) != 1:
         raise ContractError("execution_contract must bind the configured repository")
+    scoped_repository = _resolve_existing_directory(
+        repositories[0], "execution_contract.local_commit_scope.repositories[0]"
+    )
+    if scoped_repository != repository:
+        raise ContractError("execution_contract must bind the configured repository")
+    scope["repositories"] = [str(repository)]
     workspace_or_branch = scope["workspace_or_branch"]
     if not isinstance(workspace_or_branch, dict) or set(workspace_or_branch) != {"workspace", "branch"}:
         raise ContractError("workspace_or_branch has an invalid field set")
