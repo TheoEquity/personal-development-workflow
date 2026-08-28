@@ -1,6 +1,6 @@
 # Plan 阶段
 
-只在 `current_stage=writing_plan` 时完整读取。本阶段以整个工作流任务及其一个变更事件为边界；一个工作流任务始终只对应一份 Plan。Plan 内可以有多个 `Task N`，但不得为实现 Task 新建 Plan、游标或事件。重新规划仍更新 `plans/<change_id>.md`，历史版本由新的完整 Git SHA 区分。
+只在 `current_stage=writing_plan` 且 `flow=full` 时完整读取。Direct/light 不进入本阶段；需要拆步骤时只维护 `.local` 运行态任务清单，不生成正式 `plan_ref`。Full 以整个工作流任务及其一个变更事件为边界；一个工作流任务始终只对应一份 Plan。Plan 内可以有多个 `Task N`，但不得为实现 Task 新建 Plan、游标或事件。重新规划仍更新 `plans/<change_id>.md`，历史版本由新的完整 Git SHA 区分。
 
 ## 固定采用顺序
 

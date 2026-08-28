@@ -1,0 +1,160 @@
+from pathlib import Path
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class SimplifiedFlowContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = (ROOT / "SKILL.md").read_text(encoding="utf-8")
+        cls.requirements = (ROOT / "references" / "requirement-discussion.md").read_text(
+            encoding="utf-8"
+        )
+        cls.registration = (ROOT / "references" / "change-registration.md").read_text(
+            encoding="utf-8"
+        )
+        cls.spec_stage = (ROOT / "references" / "spec-stage.md").read_text(
+            encoding="utf-8"
+        )
+        cls.implementation = (ROOT / "references" / "implementation-stage.md").read_text(
+            encoding="utf-8"
+        )
+        cls.acceptance = (ROOT / "references" / "acceptance-stage.md").read_text(
+            encoding="utf-8"
+        )
+        cls.integration = (ROOT / "references" / "integration-and-cleanup.md").read_text(
+            encoding="utf-8"
+        )
+        cls.all_text = "\n".join(
+            (
+                cls.workflow,
+                cls.requirements,
+                cls.registration,
+                cls.spec_stage,
+                cls.implementation,
+                cls.acceptance,
+                cls.integration,
+            )
+        )
+
+    def test_one_router_has_three_flows_without_three_workflows(self):
+        for required in (
+            "`flow: direct | light | full`",
+            "同一个状态机",
+            "不新增阶段",
+            "`review_mode: manual | auto`",
+        ):
+            self.assertIn(required, self.all_text)
+
+    def test_bug_and_ce_ownership_are_result_based(self):
+        for required in (
+            "独立验收",
+            "已完成的旧 CE 保持不可变",
+            "`source_ce`",
+            "恢复已有行为",
+            "新增或改变正式行为",
+            "先判行为、再判本次修改风险；风险门覆盖行为分类",
+            "Bug 的现象涉及错误数据不自动升级 Full",
+        ):
+            self.assertIn(required, self.all_text)
+
+    def test_flow_and_source_ce_have_one_durable_owner(self):
+        self.assertIn("`flow` 只写入 `workflow_state`", self.all_text)
+        self.assertIn("`source_ce` 固定落在 `change.md`", self.all_text)
+
+    def test_personal_workflow_does_not_fall_back_to_in_place_development(self):
+        self.assertIn("拒绝创建或使用 Worktree 时保持 `tdd_coding` 并停止", self.all_text)
+        self.assertIn("不得在原 checkout 降级开发", self.all_text)
+
+    def test_light_spec_has_no_full_material_gate(self):
+        for required in (
+            "`light` profile",
+            "不强制既有功能影响表",
+            "不强制代码 SHA 扫描",
+            "不生成正式 `test_ref`",
+            "不生成正式 `plan_ref`",
+        ):
+            self.assertIn(required, self.all_text)
+
+    def test_project_constitution_is_optional_and_loader_is_separate(self):
+        for required in (
+            "没有项目宪法不得阻塞普通开发",
+            "Loader 只服务项目宪法接入",
+            "项目特有规则不得写入全局工作流 Skill",
+            "Disclosure Set",
+        ):
+            self.assertIn(required, self.all_text)
+
+    def test_loop_and_code_review_are_ephemeral(self):
+        for required in (
+            "`code_review: skip | run`",
+            "`loop_mode: off | on`",
+            "不进入总账",
+            "复杂任务不能进入 Loop",
+            "只能在 `direct` 与 `light` 之间切换",
+            "systematic-debugging",
+        ):
+            self.assertIn(required, self.all_text)
+
+    def test_review_uses_frozen_exact_scope_and_three_read_only_agents(self):
+        for required in (
+            "`review_scope: CE | batch`",
+            "`review_base: <sha>`",
+            "`review_head: <sha>`",
+            "`review_commits: [<integrated_commit>...]`",
+            "总计三个 Agent",
+            "两个测试 Agent",
+            "`reviewing-code-quality`",
+        ):
+            self.assertIn(required, self.all_text)
+
+    def test_review_range_is_derived_from_ce_or_batch_git_facts(self):
+        for required in (
+            "`review_head` 必须逐字等于当前 CE 的 `code_ref` SHA",
+            "`review_base` 取该 CE 最早一个入选集成记录的 `delivery_before_sha`",
+            "按 Delivery 祖先顺序排列、不得重复",
+            "`review_base=freeze_base`",
+            "`review_head=freeze_head`",
+            "`code_review=run` 的三 Agent 结果未汇总通过前不得进入 `acceptance`",
+        ):
+            self.assertIn(required, self.all_text)
+
+    def test_light_path_does_not_inherit_full_only_gates(self):
+        for required in (
+            "Direct/light 只加载本节、`test-driven-development`、`using-git-worktrees` 与 `verification-before-completion`",
+            "只有 Full 加载 `execution-contract.md`、stage Worker 与 SDD",
+            "Light 不加载 `material-change-assessment.md`",
+            "按 flow 核对当前 CE 的既有行为或短 Spec 与 diff",
+            "以下 Plan、独立 review、验收 validator 和最终逻辑稿门禁只适用于 Full",
+            "以下报告、validator、最终逻辑稿和六类引用信号只适用于 Full",
+            "以下 Worker、handoff、完整候选展示和代码基线信号只适用于 Full",
+            "以下 Plan、SDD offer、Coordinator、独立 reviewer 和材料变更评估信号只适用于 Full",
+        ):
+            self.assertIn(required, self.all_text)
+
+    def test_delivery_worker_rolls_until_user_freezes_batch(self):
+        for required in (
+            "Delivery Worktree",
+            "Worker Worktree",
+            "开发可以并发，集成必须串行",
+            "`integrated_commit`",
+            "批次边界由用户",
+            "不自动 Push",
+            "不自动删除 Worktree",
+        ):
+            self.assertIn(required, self.all_text)
+
+    def test_history_is_searchable_but_not_current_behavior_contract(self):
+        for required in (
+            "修改与验证摘要",
+            "历史摘要不是当前行为合同",
+            "当前有效 Spec",
+            "Worker 不直接修改 `change.md`",
+        ):
+            self.assertIn(required, self.all_text)
+
+
+if __name__ == "__main__":
+    unittest.main()

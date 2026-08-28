@@ -117,24 +117,23 @@ class ProgressiveRouterContractTests(unittest.TestCase):
                 if target.is_relative_to(ROOT) and target.suffix == ".md":
                     pending.append(target)
 
-    def test_completed_route_owns_atomic_hub_and_cleanup_safety(self):
+    def test_completed_route_owns_delivery_cleanup_safety(self):
         path = REFERENCES / "integration-and-cleanup.md"
         self.assertTrue(path.is_file(), path)
         text = path.read_text(encoding="utf-8")
         for required in (
-            "归位与清理候选卡",
-            "原 `code_ref`",
-            "集线 HEAD",
+            "清理候选卡",
+            "Delivery",
+            "integrated_commit",
             "git merge --no-ff",
-            "是集线 HEAD 的祖先",
-            "汇入前最后一个绿色 SHA",
+            "是 Delivery HEAD 祖先",
+            "Delivery 不动",
             "dirty/untracked",
-            "不得影响其他并发需求 worktree",
-            "同 `code_ref` 重试",
-            "push、创建/更新 MR、合并 MR、删除远端分支",
-            "本轮成员清单",
-            "change_id → code_ref",
-            "多个候选 worktree",
+            "不得 force",
+            "不自动 Push",
+            "source_ce",
+            "用户对这张精确卡确认",
+            "未集成 Worker 不清理",
         ):
             self.assertIn(required, text)
 

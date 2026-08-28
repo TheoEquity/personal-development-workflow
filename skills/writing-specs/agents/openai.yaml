@@ -1,4 +1,4 @@
 interface:
   display_name: "编写 Spec"
-  short_description: "编写行为契约并附上基于代码扫描的非确定性可能影响范围"
-  default_prompt: "使用 $writing-specs 根据已确认需求编写功能 Spec，并附上基于当前代码 SHA 的可能影响范围。"
+  short_description: "按 light 或 full 编写已确认需求的行为契约"
+  default_prompt: "使用 $writing-specs 按任务复杂度选择 light 或 full，为已确认需求编写对应粒度的功能 Spec。"

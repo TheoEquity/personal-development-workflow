@@ -238,9 +238,10 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
             )
             self.assertTrue(database_path.is_file(), database_path)
 
-    def test_register_change_always_enters_writing_spec(self):
-        self.assertIn("新事件登记并绑定后固定把阶段设为 `writing_spec`", self.text)
-        self.assertIn("只有 `spec_ref` 与 `test_ref` 都有效后才能进入 Plan", self.text)
+    def test_register_change_routes_by_flow_without_new_stages(self):
+        self.assertIn("`direct → tdd_coding`", self.text)
+        self.assertIn("`light/full → writing_spec`", self.text)
+        self.assertIn("不新增阶段", self.text)
 
     def test_personal_workflow_never_bypasses_independent_task_review(self):
         self.assertNotIn("当前会话直接 TDD", self.text)
@@ -578,10 +579,12 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         ):
             self.assertIn(required, planning)
 
-    def test_spec_phase_creates_test_draft_before_plan(self):
-        self.assertIn("`writing-specs` 调用 `writing-test-drafts`", self.text)
-        self.assertIn("Spec 与测试稿", self.text)
-        self.assertIn("从 `tdd_coding` 直接进入 `acceptance`", self.text)
+    def test_spec_phase_branches_between_light_and_full(self):
+        self.assertIn("`profile=light`", self.text)
+        self.assertIn("`profile=full`", self.text)
+        self.assertIn("只有 Full", self.text)
+        self.assertIn("`writing-test-drafts`", self.text)
+        self.assertIn("Light 验证 `spec_ref` 后进入 `tdd_coding`", self.text)
 
     def test_code_ref_is_resolved_from_actual_worktree(self):
         self.assertIn("set-code-ref <change_id> --worktree", self.text)
@@ -721,19 +724,15 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         ):
             self.assertIn(required, assessment)
 
-    def test_parallel_requirements_share_one_frozen_git_baseline(self):
-        section = (
-            self.stage_texts["integration-and-cleanup.md"]
-            + PLAN_BASELINE_SELECTION.read_text(encoding="utf-8")
-        )
-
+    def test_parallel_requirements_use_workers_from_delivery_latest_state(self):
+        section = self.stage_texts["integration-and-cleanup.md"]
         for required in (
-            "每个需求都保留自己的 `change_id`",
-            "需求分支、隔离 worktree、正式材料和 `code_ref`",
-            "同一轮默认共享已经冻结的 `base_source`、`base_locator` 和 `base_sha`",
-            "禁止仍在开发中的需求分支",
-            "另一个进行中需求的分支",
-            "每个需求仍创建自己的隔离 worktree",
+            "一个 Worker 不得跨 CE",
+            "新 Worker 从 Delivery 最新绿色 SHA 创建",
+            "开发可以并发，集成必须串行",
+            "依赖尚未集成",
+            "不在 Worker 之间建立依赖网络",
+            "integrated_commit",
         ):
             self.assertIn(required, section)
 
@@ -753,14 +752,14 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         ):
             self.assertIn(required, section)
 
-    def test_one_hub_chat_updates_the_same_open_mr(self):
+    def test_one_delivery_updates_the_same_open_mr(self):
         section = self.stage_texts["integration-and-cleanup.md"]
 
         for required in (
             "开放 MR 只有一个集线会话独占其源分支",
-            "一个集线分支/worktree 覆盖一次本地交付周期",
+            "一个 Delivery Worktree/交付分支覆盖一次滚动交付周期",
             "git merge --no-ff",
-            "`code_ref` 是集线 HEAD 的祖先",
+            "Worker HEAD 是候选 HEAD 的祖先",
             "组合验证",
             "push 同一实际源分支",
             "不得新建重复 MR",

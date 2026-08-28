@@ -84,6 +84,17 @@ class ManagingChangeLedgerContractTests(unittest.TestCase):
         ):
             self.assertIn(required, self.text)
 
+    def test_completion_reliability_gates_are_flow_specific(self):
+        self.assertIn("Full 的 `complete` 必须确认", self.text)
+        self.assertIn("direct/light 只执行各自 flow", self.text)
+        self.assertIn("Full 正准备在没有最终通过报告", self.text)
+        self.assertIn("以下验收报告、validator 和最终逻辑稿错误只适用于 Full", self.text)
+
+    def test_implementation_bug_uses_spec_handling_instead_of_discovery_spec(self):
+        self.assertNotIn("discovery_spec", self.text)
+        self.assertIn("在 `## Spec 处理` 说明中记录当前行为依据", self.text)
+        self.assertIn("没有适用 Spec 时记录相关 CE 或 `source_ce`", self.text)
+
 
 if __name__ == "__main__":
     unittest.main()

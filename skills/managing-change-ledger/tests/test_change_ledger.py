@@ -39,17 +39,17 @@ class LedgerTests(unittest.TestCase):
             self.repo / "tests/AGENTS.md",
         )
         self.agents_inventory = ";".join(
-            f"{path.resolve()}@{hashlib.sha256(path.read_bytes()).hexdigest()}"
+            f"{path}@{hashlib.sha256(path.read_bytes()).hexdigest()}"
             for path in self.agent_paths
         )
         (self.vault / "changes/CE-0001").mkdir()
         (self.vault / "changes/CE-0002").mkdir()
         (self.vault / "changes/CE-0001/change.md").write_text(
-            "---\nchange_id: CE-0001\nstatus: in_progress\n---\n# CE-0001 变更事件\n",
+            "---\nchange_id: CE-0001\nsource_ce: null\nstatus: in_progress\n---\n# CE-0001 变更事件\n",
             encoding="utf-8",
         )
         (self.vault / "changes/CE-0002/change.md").write_text(
-            "---\nchange_id: CE-0002\nstatus: in_progress\n---\n# CE-0002 变更事件\n",
+            "---\nchange_id: CE-0002\nsource_ce: null\nstatus: in_progress\n---\n# CE-0002 变更事件\n",
             encoding="utf-8",
         )
         (self.vault / "specs/CE-0001.md").write_text(
@@ -82,6 +82,12 @@ class LedgerTests(unittest.TestCase):
             "Reuse the existing persistence seam.\n\n"
             "**Tech Stack:** Python, unittest\n\n"
             "## Global Constraints\n\n- Preserve stable annotation identity.\n\n"
+            "## 开发基线\n\n"
+            "- `base_source`: `remote`\n"
+            "- `base_locator`: `origin/main`\n"
+            f"- `base_sha`: `{self.code_sha}`\n"
+            "- `base_remote`: `origin`\n"
+            "- `base_branch`: `main`\n\n"
             "## 实现兼容性分析\n\n"
             "| 来源影响项 | 现有代码或方法 | 新方案交点 | 技术影响 | 处理方式 | 对应任务 |\n"
             "|---|---|---|---|---|---|\n"
@@ -168,6 +174,8 @@ class LedgerTests(unittest.TestCase):
             "create",
             "--change-id",
             change_id,
+            "--source-ce",
+            "null",
             "--change-ref",
             f"changes/{change_id}/change.md@{self.vault_sha}",
         )
@@ -776,6 +784,7 @@ class LedgerTests(unittest.TestCase):
         final_change = (
             "---\n"
             "change_id: CE-0001\n"
+            "source_ce: null\n"
             "status: completed\n"
             f"spec_ref: {refs['spec_ref']}\n"
             f"plan_ref: {refs['plan_ref']}\n"
@@ -1406,9 +1415,13 @@ class LedgerTests(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stderr)
         contract = json.loads(result.stdout)
-        self.assertEqual((3, "adopt-plan"), (contract["contract_version"], contract["command"]))
+        self.assertEqual((4, "adopt-plan"), (contract["contract_version"], contract["command"]))
         self.assertNotIn("proof", contract)
         self.assertNotIn("adoption_change_ref", contract["arguments"])
+        self.assertEqual(
+            {"required": False, "writes": False},
+            contract["arguments"]["dry_run"],
+        )
         self.assertEqual(
             ["change_ledger.plan_ref", "workflow_state.current_stage"],
             contract["atomic_writes"],
@@ -1425,6 +1438,14 @@ class LedgerTests(unittest.TestCase):
             "explicit Spec behavior changes map to adaptation or migration tasks",
             contract["preconditions"],
         )
+        self.assertIn(
+            "candidate plan passes deterministic title, header, Task, Files, Interfaces, checkbox, and placeholder grammar",
+            contract["preconditions"],
+        )
+        self.assertIn(
+            "candidate plan declares the same source-specific baseline with a full 40-character base_sha",
+            contract["preconditions"],
+        )
 
     def test_adopt_plan_atomically_persists_refs_and_enters_tdd(self):
         refs, registration_ref = self._prepare_atomic_adoption()
@@ -1434,6 +1455,171 @@ class LedgerTests(unittest.TestCase):
         workflow = json.loads(self.cli("workflow-show", "WF-0001").stdout)
         self.assertEqual((refs["plan_ref"], registration_ref), (row["plan_ref"], row["change_ref"]))
         self.assertEqual("tdd_coding", workflow["current_stage"])
+
+    def test_adopt_plan_dry_run_validates_without_persisting_or_advancing(self):
+        refs, _ = self._prepare_atomic_adoption()
+        before_row = json.loads(self.cli("show", "CE-0001").stdout)
+        before_workflow = json.loads(self.cli("workflow-show", "WF-0001").stdout)
+
+        result = self.cli(
+            "adopt-plan",
+            "CE-0001",
+            "--workflow-id",
+            "WF-0001",
+            "--plan-ref",
+            refs["plan_ref"],
+            "--dry-run",
+        )
+
+        payload = json.loads(result.stdout)
+        self.assertEqual("validated", payload["status"])
+        self.assertTrue(payload["dry_run"])
+        self.assertEqual(refs["plan_ref"], payload["candidate_plan_ref"])
+        self.assertEqual(
+            {
+                "change_ledger.plan_ref": refs["plan_ref"],
+                "workflow_state.current_stage": "tdd_coding",
+            },
+            payload["would_write"],
+        )
+        self.assertEqual(before_row, json.loads(self.cli("show", "CE-0001").stdout))
+        self.assertEqual(
+            before_workflow,
+            json.loads(self.cli("workflow-show", "WF-0001").stdout),
+        )
+
+    def test_adopt_plan_dry_run_does_not_request_a_write_lock(self):
+        refs, _ = self._prepare_atomic_adoption()
+
+        with closing(sqlite3.connect(self.db)) as writer:
+            writer.execute("BEGIN IMMEDIATE")
+            result = self.cli(
+                "adopt-plan",
+                "CE-0001",
+                "--workflow-id",
+                "WF-0001",
+                "--plan-ref",
+                refs["plan_ref"],
+                "--dry-run",
+            )
+            writer.rollback()
+
+        payload = json.loads(result.stdout)
+        self.assertEqual("validated", payload["status"])
+
+    def test_adopt_plan_dry_run_rejects_invalid_plan_without_writes(self):
+        plan = (self.vault / "plans/CE-0001.md").read_text(encoding="utf-8")
+        invalid_plan = plan.replace(
+            "- [ ] **Step 1: Write the failing test**",
+            "**Step 1: Write the failing test**",
+        )
+        plan_ref = self._commit_material(
+            "plans/CE-0001.md",
+            invalid_plan,
+            "invalid dry-run plan",
+        )
+        self._prepare_atomic_adoption(plan_ref=plan_ref)
+        before_row = json.loads(self.cli("show", "CE-0001").stdout)
+        before_workflow = json.loads(self.cli("workflow-show", "WF-0001").stdout)
+
+        result = self.cli(
+            "adopt-plan",
+            "CE-0001",
+            "--workflow-id",
+            "WF-0001",
+            "--plan-ref",
+            plan_ref,
+            "--dry-run",
+            code=2,
+        )
+
+        self.assertIn("checkbox", result.stderr)
+        self.assertEqual(before_row, json.loads(self.cli("show", "CE-0001").stdout))
+        self.assertEqual(
+            before_workflow,
+            json.loads(self.cli("workflow-show", "WF-0001").stdout),
+        )
+
+    def test_adopt_plan_dry_run_rejects_abbreviated_plan_base_sha_without_writes(self):
+        plan = (self.vault / "plans/CE-0001.md").read_text(encoding="utf-8")
+        invalid_plan = plan.replace(self.code_sha, self.code_sha[:8])
+        plan_ref = self._commit_material(
+            "plans/CE-0001.md",
+            invalid_plan,
+            "abbreviated plan base sha",
+        )
+        self._prepare_atomic_adoption(plan_ref=plan_ref)
+        before_row = json.loads(self.cli("show", "CE-0001").stdout)
+        before_workflow = json.loads(self.cli("workflow-show", "WF-0001").stdout)
+
+        result = self.cli(
+            "adopt-plan",
+            "CE-0001",
+            "--workflow-id",
+            "WF-0001",
+            "--plan-ref",
+            plan_ref,
+            "--dry-run",
+            code=2,
+        )
+
+        self.assertIn("base_sha", result.stderr)
+        self.assertEqual(before_row, json.loads(self.cli("show", "CE-0001").stdout))
+        self.assertEqual(
+            before_workflow,
+            json.loads(self.cli("workflow-show", "WF-0001").stdout),
+        )
+
+    def test_adopt_plan_dry_run_rejects_blank_task_interface_without_writes(self):
+        plan = (self.vault / "plans/CE-0001.md").read_text(encoding="utf-8")
+        invalid_plan = plan.replace(
+            "- Consumes: annotation ID",
+            "- Consumes:   ",
+        )
+        plan_ref = self._commit_material(
+            "plans/CE-0001.md",
+            invalid_plan,
+            "blank task interface",
+        )
+        self._prepare_atomic_adoption(plan_ref=plan_ref)
+        before_row = json.loads(self.cli("show", "CE-0001").stdout)
+        before_workflow = json.loads(self.cli("workflow-show", "WF-0001").stdout)
+
+        result = self.cli(
+            "adopt-plan",
+            "CE-0001",
+            "--workflow-id",
+            "WF-0001",
+            "--plan-ref",
+            plan_ref,
+            "--dry-run",
+            code=2,
+        )
+
+        self.assertIn("Consumes", result.stderr)
+        self.assertEqual(before_row, json.loads(self.cli("show", "CE-0001").stdout))
+        self.assertEqual(
+            before_workflow,
+            json.loads(self.cli("workflow-show", "WF-0001").stdout),
+        )
+
+    def test_adopt_plan_dry_run_does_not_create_a_missing_database(self):
+        missing_db = self.vault / ".local" / "missing.sqlite3"
+        self._write_config(database=str(missing_db))
+
+        result = self.cli(
+            "adopt-plan",
+            "CE-0001",
+            "--workflow-id",
+            "WF-0001",
+            "--plan-ref",
+            f"plans/CE-0001.md@{self.vault_sha}",
+            "--dry-run",
+            code=2,
+        )
+
+        self.assertIn("does not exist", result.stderr)
+        self.assertFalse(missing_db.exists())
 
     def test_active_writing_plan_rejects_split_plan_and_change_ref_writes(self):
         refs, registration_ref = self._prepare_atomic_adoption()
@@ -2000,6 +2186,246 @@ class LedgerTests(unittest.TestCase):
             code=2,
         )
         self.assertIn("does not match", mismatch.stderr)
+
+    def test_workflow_cursor_persists_flow_and_review_mode(self):
+        payload = json.loads(
+            self.cli(
+                "workflow-create",
+                "--flow",
+                "light",
+                "--review-mode",
+                "auto",
+            ).stdout
+        )
+        self.assertEqual("light", payload["flow"])
+        self.assertEqual("auto", payload["review_mode"])
+        stored = json.loads(self.cli("workflow-show", "WF-0001").stdout)
+        self.assertEqual(("light", "auto"), (stored["flow"], stored["review_mode"]))
+
+    def test_direct_bound_workflow_starts_at_tdd_without_spec_or_plan(self):
+        self.create_change()
+        payload = json.loads(
+            self.cli(
+                "workflow-create",
+                "--change-id",
+                "CE-0001",
+                "--flow",
+                "direct",
+            ).stdout
+        )
+        self.assertEqual("tdd_coding", payload["current_stage"])
+        self.assertEqual("direct", payload["flow"])
+
+    def test_light_enters_tdd_with_short_spec_but_without_plan_or_test_ref(self):
+        (self.vault / "specs/CE-0001.md").write_text(
+            "# Spec：Storybook 显示开关\n\n"
+            "## 要解决的问题\n\n- 允许用户控制显示。\n\n"
+            "## 触发条件\n\n- 用户切换开关。\n\n"
+            "## 期望行为\n\n- 组件按开关状态显示或隐藏。\n\n"
+            "## 本次范围\n\n- 包含：单个 Storybook 控件。\n- 不包含：生产配置。\n\n"
+            "## 完成条件\n\n- 两种状态均可独立验证。\n",
+            encoding="utf-8",
+        )
+        light_sha = self._commit(self.vault, "light spec")
+        self.create_change()
+        self.cli(
+            "set-ref",
+            "CE-0001",
+            "--field",
+            "spec_ref",
+            "--value",
+            f"specs/CE-0001.md@{light_sha}",
+        )
+        self.cli(
+            "workflow-create",
+            "--change-id",
+            "CE-0001",
+            "--flow",
+            "light",
+        )
+        payload = json.loads(
+            self.cli(
+                "workflow-set-stage",
+                "WF-0001",
+                "--stage",
+                "tdd_coding",
+            ).stdout
+        )
+        self.assertEqual("tdd_coding", payload["current_stage"])
+        change = json.loads(self.cli("show", "CE-0001").stdout)
+        self.assertIsNone(change["plan_ref"])
+        self.assertIsNone(change["test_ref"])
+
+    def test_flow_and_review_mode_can_be_changed_without_persisting_loop_or_review(self):
+        self.cli("workflow-create", "--flow", "direct")
+        payload = json.loads(
+            self.cli(
+                "workflow-set-controls",
+                "WF-0001",
+                "--flow",
+                "light",
+                "--review-mode",
+                "auto",
+            ).stdout
+        )
+        self.assertEqual(("light", "auto"), (payload["flow"], payload["review_mode"]))
+        self.assertNotIn("loop_mode", payload)
+        self.assertNotIn("code_review", payload)
+
+    def test_direct_completion_requires_only_code_and_history_summary(self):
+        self.create_change()
+        self.cli(
+            "workflow-create",
+            "--change-id",
+            "CE-0001",
+            "--flow",
+            "direct",
+            "--review-mode",
+            "auto",
+        )
+        self.set_code_ref()
+        self.cli("workflow-set-stage", "WF-0001", "--stage", "acceptance")
+        (self.vault / "changes/CE-0001/change.md").write_text(
+            "---\n"
+            "change_id: CE-0001\n"
+            "source_ce: null\n"
+            "status: completed\n"
+            f"code_ref: code-repo@{self.code_sha}\n"
+            "---\n"
+            "# CE-0001 变更事件\n\n"
+            "## 修改与验证摘要\n\n"
+            "- 类型：Bug\n"
+            "- 模块：保存流程\n"
+            "- 问题：失败时写入半条数据。\n"
+            "- 修改：失败路径改为原子回滚。\n"
+            "- 验证：回归测试确认数据不变。\n",
+            encoding="utf-8",
+        )
+        final_sha = self._commit(self.vault, "complete direct")
+        payload = json.loads(
+            self.cli(
+                "complete",
+                "CE-0001",
+                "--change-ref",
+                f"changes/CE-0001/change.md@{final_sha}",
+            ).stdout
+        )
+        self.assertEqual("completed", payload["status"])
+        workflow = json.loads(self.cli("workflow-show", "WF-0001").stdout)
+        self.assertEqual(("completed", "closed", "manual"), (
+            workflow["current_stage"], workflow["state"], workflow["review_mode"]
+        ))
+        change = json.loads(self.cli("show", "CE-0001").stdout)
+        self.assertIsNone(change["spec_ref"])
+        self.assertIsNone(change["plan_ref"])
+        self.assertIsNone(change["test_ref"])
+        self.assertIsNone(change["evidence_ref"])
+
+    def test_light_completion_requires_short_spec_code_and_history_but_no_plan(self):
+        (self.vault / "specs/CE-0001.md").write_text(
+            "# Spec：小开关\n\n"
+            "## 要解决的问题\n\n- 提供显示控制。\n\n"
+            "## 触发条件\n\n- 用户切换。\n\n"
+            "## 期望行为\n\n- 按状态显示。\n\n"
+            "## 本次范围\n\n- 包含：一个开关。\n- 不包含：全局配置。\n\n"
+            "## 完成条件\n\n- 两种状态均验证通过。\n",
+            encoding="utf-8",
+        )
+        spec_sha = self._commit(self.vault, "light spec")
+        self.create_change()
+        self.cli(
+            "set-ref", "CE-0001", "--field", "spec_ref", "--value",
+            f"specs/CE-0001.md@{spec_sha}",
+        )
+        self.cli("workflow-create", "--change-id", "CE-0001", "--flow", "light")
+        self.cli("workflow-set-stage", "WF-0001", "--stage", "tdd_coding")
+        self.set_code_ref()
+        self.cli("workflow-set-stage", "WF-0001", "--stage", "acceptance")
+        (self.vault / "changes/CE-0001/change.md").write_text(
+            "---\n"
+            "change_id: CE-0001\n"
+            "source_ce: null\n"
+            "status: completed\n"
+            f"spec_ref: specs/CE-0001.md@{spec_sha}\n"
+            f"code_ref: code-repo@{self.code_sha}\n"
+            "---\n"
+            "# CE-0001 变更事件\n\n"
+            "## 修改与验证摘要\n\n"
+            "- 类型：小需求\n"
+            "- 模块：Storybook\n"
+            "- 问题：缺少显示控制。\n"
+            "- 修改：增加本地显示开关。\n"
+            "- 验证：两种状态均通过。\n",
+            encoding="utf-8",
+        )
+        final_sha = self._commit(self.vault, "complete light")
+        self.cli(
+            "complete", "CE-0001", "--change-ref",
+            f"changes/CE-0001/change.md@{final_sha}",
+        )
+        change = json.loads(self.cli("show", "CE-0001").stdout)
+        self.assertEqual("completed", change["status"])
+        self.assertIsNone(change["plan_ref"])
+        self.assertIsNone(change["test_ref"])
+        self.assertIsNone(change["evidence_ref"])
+
+    def test_source_ce_is_validated_and_preserved_into_direct_history(self):
+        (self.vault / "changes/CE-0001/change.md").write_text(
+            "---\n"
+            "change_id: CE-0001\n"
+            "source_ce: CE-0007\n"
+            "status: in_progress\n"
+            "---\n"
+            "# CE-0001 变更事件\n",
+            encoding="utf-8",
+        )
+        registration_sha = self._commit(self.vault, "register sourced bug")
+        self.cli(
+            "create", "--change-id", "CE-0001", "--source-ce", "CE-0007", "--change-ref",
+            f"changes/CE-0001/change.md@{registration_sha}",
+        )
+        self.cli("workflow-create", "--change-id", "CE-0001", "--flow", "direct")
+        self.set_code_ref()
+        self.cli("workflow-set-stage", "WF-0001", "--stage", "acceptance")
+        (self.vault / "changes/CE-0001/change.md").write_text(
+            "---\n"
+            "change_id: CE-0001\n"
+            "source_ce: CE-0008\n"
+            "status: completed\n"
+            f"code_ref: code-repo@{self.code_sha}\n"
+            "---\n"
+            "# CE-0001 变更事件\n\n"
+            "## 修改与验证摘要\n\n"
+            "- 类型：Bug\n"
+            "- 模块：保存流程\n"
+            "- 问题：失败时写入半条数据。\n"
+            "- 修改：失败路径改为原子回滚。\n"
+            "- 验证：回归测试确认数据不变。\n"
+            "- 来源：CE-0008\n",
+            encoding="utf-8",
+        )
+        final_sha = self._commit(self.vault, "mismatched source")
+        result = self.cli(
+            "complete", "CE-0001", "--change-ref",
+            f"changes/CE-0001/change.md@{final_sha}", code=2,
+        )
+        self.assertIn("source_ce", result.stderr)
+        corrected = (self.vault / "changes/CE-0001/change.md").read_text(
+            encoding="utf-8"
+        ).replace("source_ce: CE-0008", "source_ce: CE-0007").replace(
+            "- 来源：CE-0008", "- 来源：CE-0007"
+        )
+        (self.vault / "changes/CE-0001/change.md").write_text(
+            corrected, encoding="utf-8"
+        )
+        corrected_sha = self._commit(self.vault, "correct source")
+        completed = json.loads(
+            self.cli(
+                "complete", "CE-0001", "--change-ref",
+                f"changes/CE-0001/change.md@{corrected_sha}",
+            ).stdout
+        )
+        self.assertEqual("completed", completed["status"])
 
 
 if __name__ == "__main__":

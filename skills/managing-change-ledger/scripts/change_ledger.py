@@ -32,6 +32,8 @@ FORMAL_STAGES = (
     "acceptance",
 )
 WORKFLOW_STAGES = PRE_EVENT_STAGES + FORMAL_STAGES
+FLOWS = ("direct", "light", "full")
+REVIEW_MODES = ("manual", "auto")
 REFERENCE_FIELDS = (
     "spec_ref",
     "change_ref",
@@ -55,7 +57,7 @@ VAULT_ROLE_PREFIXES = {
     "test_ref": "tests/",
     "evidence_ref": "acceptance/",
 }
-STAGE_PREREQUISITES = {
+FULL_STAGE_PREREQUISITES = {
     "writing_plan": ("spec_ref", "test_ref"),
     "tdd_coding": ("spec_ref", "plan_ref", "test_ref"),
     "writing_test": ("spec_ref", "plan_ref", "code_ref"),
@@ -63,6 +65,20 @@ STAGE_PREREQUISITES = {
 }
 class LedgerError(Exception):
     """A user-correctable ledger operation error."""
+
+
+def formal_stages_for_flow(flow: str) -> tuple[str, ...]:
+    if flow == "direct":
+        return ("tdd_coding", "acceptance")
+    if flow == "light":
+        return ("writing_spec", "tdd_coding", "acceptance")
+    if flow == "full":
+        return FORMAL_STAGES
+    raise LedgerError(f"unknown workflow flow: {flow}")
+
+
+def initial_bound_stage(flow: str) -> str:
+    return "tdd_coding" if flow == "direct" else "writing_spec"
 
 
 @dataclass(frozen=True)
@@ -297,6 +313,8 @@ def workflow_table_sql(name: str, change_table: str) -> str:
         workflow_id TEXT PRIMARY KEY,
         change_id TEXT,
         current_stage TEXT NOT NULL CHECK (current_stage IN ({all_stages})),
+        flow TEXT NOT NULL CHECK (flow IN ('direct', 'light', 'full')),
+        review_mode TEXT NOT NULL CHECK (review_mode IN ('manual', 'auto')),
         state TEXT NOT NULL CHECK (state IN ('active', 'closed')),
         FOREIGN KEY (change_id) REFERENCES {change_table}(change_id),
         CHECK (
@@ -359,15 +377,6 @@ def preflight_migration(connection: sqlite3.Connection):
             raise LedgerError(f"invalid change status during migration: {item['change_id']}")
         if not CHANGE_ID_PATTERN.fullmatch(item["change_id"]):
             raise LedgerError(f"invalid change_id during migration: {item['change_id']}")
-        if item["status"] == "completed":
-            missing = [field for field in REFERENCE_FIELDS if not item.get(field)]
-            if "plan_ref" in missing and (plan or implementation):
-                missing.remove("plan_ref")
-            if missing:
-                raise LedgerError(
-                    f"completed change has missing references during migration: {item['change_id']}: "
-                    + ", ".join(missing)
-                )
         change_rows.append(
             {
                 "change_id": item["change_id"],
@@ -385,12 +394,24 @@ def preflight_migration(connection: sqlite3.Connection):
 
     workflow_rows = []
     if table_exists(connection, "workflow_state"):
-        if table_columns(connection, "workflow_state") != ["workflow_id", "change_id", "current_stage", "state"]:
+        workflow_columns = table_columns(connection, "workflow_state")
+        if workflow_columns not in (
+            ["workflow_id", "change_id", "current_stage", "state"],
+            ["workflow_id", "change_id", "current_stage", "flow", "review_mode", "state"],
+        ):
             raise LedgerError("workflow_state schema cannot be migrated safely")
         active_bindings: set[str] = set()
         for raw in connection.execute("SELECT * FROM workflow_state"):
             item = dict(raw)
             stage = "writing_plan" if item["current_stage"] == "writing_implementation" else item["current_stage"]
+            flow = item.get("flow", "full")
+            review_mode = item.get("review_mode", "manual")
+            if flow not in FLOWS:
+                raise LedgerError(f"invalid workflow flow during migration: {item['workflow_id']}")
+            if review_mode not in REVIEW_MODES:
+                raise LedgerError(
+                    f"invalid workflow review_mode during migration: {item['workflow_id']}"
+                )
             if stage not in (*WORKFLOW_STAGES, "completed"):
                 raise LedgerError(f"unknown stage during migration: {item['current_stage']}")
             if item["state"] not in ("active", "closed"):
@@ -410,6 +431,14 @@ def preflight_migration(connection: sqlite3.Connection):
             )
             if not structurally_valid:
                 raise LedgerError(f"workflow binding/stage invariant violation: {item['workflow_id']}")
+            if (
+                item["state"] == "active"
+                and item["change_id"] is not None
+                and stage not in formal_stages_for_flow(flow)
+            ):
+                raise LedgerError(
+                    f"workflow flow/stage invariant violation: {item['workflow_id']}"
+                )
             if item["change_id"] is not None:
                 change_status = change_statuses[item["change_id"]]
                 if item["state"] == "active" and change_status != "in_progress":
@@ -420,7 +449,34 @@ def preflight_migration(connection: sqlite3.Connection):
                     raise LedgerError(
                         f"closed workflow must bind a completed change: {item['workflow_id']}"
                     )
-            workflow_rows.append({**item, "current_stage": stage})
+            workflow_rows.append(
+                {
+                    **item,
+                    "current_stage": stage,
+                    "flow": flow,
+                    "review_mode": review_mode,
+                }
+            )
+    completed_flows = {
+        item["change_id"]: item["flow"]
+        for item in workflow_rows
+        if item["state"] == "closed" and item["change_id"] is not None
+    }
+    for item in change_rows:
+        if item["status"] != "completed":
+            continue
+        flow = completed_flows.get(item["change_id"], "full")
+        required = {
+            "direct": ("change_ref", "code_ref"),
+            "light": ("spec_ref", "change_ref", "code_ref"),
+            "full": REFERENCE_FIELDS,
+        }[flow]
+        missing = [field for field in required if not item.get(field)]
+        if missing:
+            raise LedgerError(
+                f"completed change has missing references during migration: {item['change_id']}: "
+                + ", ".join(missing)
+            )
     return change_rows, workflow_rows
 
 
@@ -443,8 +499,15 @@ def rebuild_canonical_schema(connection: sqlite3.Connection) -> None:
         )
     for item in workflow_rows:
         connection.execute(
-            "INSERT INTO workflow_state_new VALUES (?,?,?,?)",
-            (item["workflow_id"], item["change_id"], item["current_stage"], item["state"]),
+            "INSERT INTO workflow_state_new VALUES (?,?,?,?,?,?)",
+            (
+                item["workflow_id"],
+                item["change_id"],
+                item["current_stage"],
+                item["flow"],
+                item["review_mode"],
+                item["state"],
+            ),
         )
     if connection.execute("SELECT COUNT(*) FROM change_ledger_new").fetchone()[0] != len(change_rows):
         raise LedgerError("migration row-count verification failed for change_ledger")
@@ -753,10 +816,28 @@ def require_meaningful(lines: list[str], label: str, *, allow_none: bool = False
         raise LedgerError(f"{label} must contain a concrete value")
 
 
-def validate_change_document(text: str, change_id: str, *, final: bool) -> dict[str, str]:
+def validate_change_document(
+    text: str,
+    change_id: str,
+    *,
+    final: bool,
+    expected_source_ce: str | None = None,
+    require_source_ce: bool = False,
+) -> dict[str, str]:
     fields, _ = parse_frontmatter(text, "change document")
     if fields.get("change_id") != change_id:
         raise LedgerError("change document change_id does not match ledger change_id")
+    if require_source_ce and "source_ce" not in fields:
+        raise LedgerError("change document must declare source_ce as null or CE-0001")
+    source_ce = fields.get("source_ce", "null")
+    if source_ce != "null":
+        if not CHANGE_ID_PATTERN.fullmatch(source_ce):
+            raise LedgerError("change document source_ce must be null or use CE-0001 format")
+        if source_ce == change_id:
+            raise LedgerError("change document source_ce cannot reference itself")
+    if expected_source_ce is not None and source_ce != expected_source_ce:
+        raise LedgerError("change document source_ce does not match --source-ce")
+    fields["source_ce"] = source_ce
     expected_status = "completed" if final else "in_progress"
     if fields.get("status") != expected_status:
         raise LedgerError("change document status does not match its ledger lifecycle")
@@ -807,6 +888,32 @@ def validate_final_logic_document(text: str, change_id: str) -> None:
             "final logic draft",
         )
         require_meaningful(attention, "final logic draft ## 注意事项")
+
+
+def validate_history_summary(text: str, *, expected_source_ce: str) -> None:
+    lines = single_section_body(text, "## 修改与验证摘要", "final change document")
+    values: dict[str, str] = {}
+    for raw in lines:
+        line = re.sub(r"^[-*+]\s*", "", raw.strip())
+        if not line:
+            continue
+        match = re.fullmatch(r"(类型|模块|问题|修改|验证|来源)[：:]\s*(.+)", line)
+        if match:
+            key, value = match.groups()
+            if key in values:
+                raise LedgerError(f"duplicate history summary field: {key}")
+            require_meaningful([value], f"history summary {key}")
+            values[key] = value
+    missing = [key for key in ("类型", "模块", "问题", "修改", "验证") if key not in values]
+    if missing:
+        raise LedgerError("history summary missing fields: " + ", ".join(missing))
+    if values["类型"] not in ("Bug", "小需求"):
+        raise LedgerError("history summary 类型 must be Bug or 小需求")
+    if expected_source_ce == "null":
+        if "来源" in values:
+            raise LedgerError("history summary 来源 must be omitted when source_ce is null")
+    elif values.get("来源") != expected_source_ce:
+        raise LedgerError("history summary 来源 must exactly match source_ce")
 
 
 def ordered_section_bodies(
@@ -967,6 +1074,33 @@ def validate_spec_document(text: str) -> str:
     return baselines[0]
 
 
+def validate_light_spec_document(text: str) -> None:
+    visible = strip_fenced_blocks(text)
+    lines = visible.splitlines()
+    if not any(re.fullmatch(r"# Spec[：:].+", line.strip()) for line in lines):
+        raise LedgerError("light spec must start with a named # Spec heading")
+    required = (
+        "## 要解决的问题",
+        "## 触发条件",
+        "## 期望行为",
+        "## 本次范围",
+        "## 完成条件",
+    )
+    bodies = ordered_section_bodies(visible, required, "light spec")
+    for heading in required:
+        require_meaningful(bodies[heading], f"light spec {heading}")
+    optional = [line for line in lines if line.strip() == "## 必须保持不变"]
+    if len(optional) > 1:
+        raise LedgerError("light spec may contain at most one ## 必须保持不变 section")
+    if optional:
+        require_meaningful(
+            single_section_body(visible, "## 必须保持不变", "light spec"),
+            "light spec ## 必须保持不变",
+        )
+    if "## 既有功能与流程影响" in visible or "## 可能的影响范围（非行为契约）" in visible:
+        raise LedgerError("light spec must not include full-profile impact sections")
+
+
 def validate_spec_impact_contract(text: str) -> dict[str, str]:
     heading = "## 既有功能与流程影响"
     lines = single_section_body(text, heading, "spec")
@@ -1092,16 +1226,30 @@ def validate_plan_document(text: str) -> tuple[str, ...]:
             raise LedgerError("each plan task must name at least one exact file")
         target_paths.extend(file_entries)
         interface_text = task_lines[interfaces[0] + 1 :]
-        consumes = [line for line in interface_text if re.fullmatch(r"\s*-\s*Consumes:\s*.+", line)]
-        produces = [line for line in interface_text if re.fullmatch(r"\s*-\s*Produces:\s*.+", line)]
+        consumes = [
+            match.group(1)
+            for line in interface_text
+            if (match := re.fullmatch(
+                r"\s*-\s*Consumes:\s*(\S(?:.*\S)?)\s*",
+                line,
+            ))
+        ]
+        produces = [
+            match.group(1)
+            for line in interface_text
+            if (match := re.fullmatch(
+                r"\s*-\s*Produces:\s*(\S(?:.*\S)?)\s*",
+                line,
+            ))
+        ]
         checkboxes = [
             line
             for line in task_lines
             if re.fullmatch(r"\s*- \[ \] \*\*Step \d+:\s*.+\*\*\s*", line)
         ]
-        if not consumes or not produces or not checkboxes:
+        if len(consumes) != 1 or len(produces) != 1 or not checkboxes:
             raise LedgerError(
-                "each plan task must contain non-empty Interfaces and at least one checkbox step"
+                "each plan task must contain exactly one non-empty Consumes and Produces interface and at least one checkbox step"
             )
     return tuple(target_paths)
 
@@ -1225,6 +1373,111 @@ def validate_plan_compatibility_contract(
             )
 
 
+def validate_plan_baseline_contract(
+    config: RuntimeConfig,
+    spec_text: str,
+    plan_text: str,
+) -> None:
+    heading = "## 开发基线"
+    lines = single_section_body(plan_text, heading, "plan")
+    known_fields = {
+        "base_source",
+        "base_locator",
+        "base_sha",
+        "base_remote",
+        "base_branch",
+        "base_worktree",
+        "base_local_branch",
+        "base_detached_sha",
+    }
+    fields: dict[str, str] = {}
+    for line in lines:
+        match = re.fullmatch(
+            r"\s*(?:-\s*)?`?(base_[a-z_]+)`?\s*:\s*(.+?)\s*",
+            line,
+        )
+        if match is None or match.group(1) not in known_fields:
+            continue
+        key, value = match.groups()
+        value = value.strip()
+        if len(value) >= 2 and value.startswith("`") and value.endswith("`"):
+            value = value[1:-1].strip()
+        if key in fields:
+            raise LedgerError(f"plan 开发基线 contains duplicate {key}")
+        require_meaningful([value], f"plan 开发基线 {key}")
+        fields[key] = value
+
+    required = ("base_source", "base_locator", "base_sha")
+    missing = [field for field in required if field not in fields]
+    if missing:
+        raise LedgerError("plan 开发基线 is missing " + ", ".join(missing))
+    if fields["base_source"] not in ("remote", "local"):
+        raise LedgerError("plan base_source must be remote or local")
+    if re.fullmatch(r"[0-9a-fA-F]{40}", fields["base_sha"]) is None:
+        raise LedgerError("plan base_sha must be a full 40-character Git commit SHA")
+
+    visible_lines = strip_fenced_blocks(plan_text).splitlines()
+    global_position = next(
+        index
+        for index, line in enumerate(visible_lines)
+        if line.strip() == "## Global Constraints"
+    )
+    baseline_position = next(
+        index for index, line in enumerate(visible_lines) if line.strip() == heading
+    )
+    compatibility_position = next(
+        index
+        for index, line in enumerate(visible_lines)
+        if line.strip() == "## 实现兼容性分析"
+    )
+    first_task_position = next(
+        index
+        for index, line in enumerate(visible_lines)
+        if re.fullmatch(r"### Task [0-9]+:\s*.+", line.strip())
+    )
+    if not global_position < baseline_position < compatibility_position < first_task_position:
+        raise LedgerError(
+            "plan 开发基线 must follow Global Constraints and precede compatibility analysis and tasks"
+        )
+
+    source = fields["base_source"]
+    if source == "remote":
+        missing_remote = [
+            field for field in ("base_remote", "base_branch") if field not in fields
+        ]
+        if missing_remote:
+            raise LedgerError(
+                "remote plan 开发基线 is missing " + ", ".join(missing_remote)
+            )
+    else:
+        missing_local = [
+            field
+            for field in ("base_worktree", "base_local_branch", "base_detached_sha")
+            if field not in fields
+        ]
+        if missing_local:
+            raise LedgerError(
+                "local plan 开发基线 is missing " + ", ".join(missing_local)
+            )
+        if not Path(fields["base_worktree"]).is_absolute():
+            raise LedgerError("plan base_worktree must be an absolute path")
+        local_branch = fields["base_local_branch"]
+        detached_sha = fields["base_detached_sha"]
+        if (local_branch == "null") == (detached_sha == "null"):
+            raise LedgerError(
+                "local plan baseline must identify exactly one branch or detached SHA"
+            )
+        if detached_sha != "null" and detached_sha.lower() != fields["base_sha"].lower():
+            raise LedgerError("plan base_detached_sha must equal base_sha")
+
+    spec_baseline = validate_spec_document(spec_text)
+    repository_name, _ = split_reference(spec_baseline, "repository")
+    validate_code_reference(
+        config,
+        f"{repository_name}@{fields['base_sha'].lower()}",
+    )
+
+
 def resolve_plan_targets(code_repository: Path, plan_paths: tuple[str, ...]) -> tuple[Path, ...]:
     targets: list[Path] = []
     repository = code_repository.resolve()
@@ -1308,9 +1561,20 @@ def validate_stage_prerequisites(
     change: sqlite3.Row,
     target_stage: str,
     *,
+    flow: str = "full",
     enforce_impact_contract: bool = True,
 ) -> None:
-    required = STAGE_PREREQUISITES.get(target_stage, ())
+    if flow == "direct":
+        required = {"acceptance": ("code_ref",)}.get(target_stage, ())
+    elif flow == "light":
+        required = {
+            "tdd_coding": ("spec_ref",),
+            "acceptance": ("spec_ref", "code_ref"),
+        }.get(target_stage, ())
+    elif flow == "full":
+        required = FULL_STAGE_PREREQUISITES.get(target_stage, ())
+    else:
+        raise LedgerError(f"unknown workflow flow: {flow}")
     missing = [field for field in required if not change[field]]
     if missing:
         raise LedgerError(
@@ -1322,10 +1586,13 @@ def validate_stage_prerequisites(
         spec_text = read_vault_blob(
             config, "spec_ref", change["spec_ref"], change["change_id"]
         )
-        spec_baseline = validate_spec_document(spec_text)
-        validate_code_reference(config, spec_baseline)
-        if target_stage == "writing_plan" and enforce_impact_contract:
-            validate_spec_impact_contract(spec_text)
+        if flow == "light":
+            validate_light_spec_document(spec_text)
+        else:
+            spec_baseline = validate_spec_document(spec_text)
+            validate_code_reference(config, spec_baseline)
+            if target_stage == "writing_plan" and enforce_impact_contract:
+                validate_spec_impact_contract(spec_text)
     if "plan_ref" in required:
         validate_plan_document(
             read_vault_blob(config, "plan_ref", change["plan_ref"], change["change_id"])
@@ -1334,7 +1601,7 @@ def validate_stage_prerequisites(
         validate_test_draft_contract(
             read_vault_blob(config, "test_ref", change["test_ref"], change["change_id"])
         )
-    if target_stage in ("tdd_coding", "writing_test", "acceptance"):
+    if flow == "full" and target_stage in ("tdd_coding", "writing_test", "acceptance"):
         validate_plan_execution_context(
             config,
             change["change_id"],
@@ -1366,6 +1633,8 @@ def command_create(args, config):
                 read_vault_blob(config, "change_ref", args.change_ref, change_id),
                 change_id,
                 final=False,
+                expected_source_ce=args.source_ce,
+                require_source_ce=True,
             )
             if args.spec_ref:
                 validate_reference(config, "spec_ref", args.spec_ref, change_id)
@@ -1506,7 +1775,7 @@ def command_set_ref(args, config):
 def command_plan_adoption_contract(args, config):
     emit(
         {
-            "contract_version": 3,
+            "contract_version": 4,
             "command": "adopt-plan",
             "arguments": {
                 "change_id": {"format": "^CE-[0-9]{4,}$", "required": True},
@@ -1515,15 +1784,18 @@ def command_plan_adoption_contract(args, config):
                     "format": "plans/<change_id>.md@<full-vault-commit-sha>",
                     "required": True,
                 },
+                "dry_run": {"required": False, "writes": False},
             },
             "preconditions": [
                 "workflow is active and bound to change_id",
                 "workflow current_stage is writing_plan",
                 "change status is in_progress",
                 "spec_ref contains a valid existing-flow impact contract",
+                "candidate plan passes deterministic title, header, Task, Files, Interfaces, checkbox, and placeholder grammar",
                 "candidate plan covers all Spec impact_id values with no blocking rows",
                 "explicit Spec behavior changes map to adaptation or migration tasks",
                 "Spec code baseline is a full exact configured repository commit",
+                "candidate plan declares the same source-specific baseline with a full 40-character base_sha",
                 "all applicable AGENTS.md files for Plan targets are readable and inventoried",
             ],
             "atomic_writes": [
@@ -1534,87 +1806,118 @@ def command_plan_adoption_contract(args, config):
     )
 
 
+def validate_plan_adoption(connection, args, config):
+    require_schema(connection, workflow=True)
+    change = get_change(connection, args.change_id)
+    workflow = get_workflow(connection, args.workflow_id)
+    if change["status"] != "in_progress":
+        raise LedgerError("completed change is immutable")
+    if workflow["state"] != "active" or workflow["change_id"] != args.change_id:
+        raise LedgerError("adopt-plan requires the active workflow bound to change_id")
+    if workflow["flow"] != "full":
+        raise LedgerError("adopt-plan is available only for full workflows")
+
+    exact_repeat = (
+        workflow["current_stage"] == "tdd_coding"
+        and change["plan_ref"] == args.plan_ref
+    )
+    if workflow["current_stage"] != "writing_plan" and not exact_repeat:
+        raise LedgerError("adopt-plan requires workflow current_stage writing_plan")
+
+    validate_stage_prerequisites(
+        config,
+        change,
+        "writing_plan",
+        flow="full",
+        enforce_impact_contract=not exact_repeat,
+    )
+    validate_reference(config, "plan_ref", args.plan_ref, args.change_id)
+    plan_text = read_vault_blob(config, "plan_ref", args.plan_ref, args.change_id)
+    validate_plan_document(plan_text)
+    if not exact_repeat:
+        spec_text = read_vault_blob(
+            config, "spec_ref", change["spec_ref"], args.change_id
+        )
+        validate_plan_compatibility_contract(spec_text, plan_text)
+        validate_plan_baseline_contract(config, spec_text, plan_text)
+    agents = validate_plan_execution_context(
+        config,
+        args.change_id,
+        change["spec_ref"],
+        args.plan_ref,
+    )
+    return change, workflow, exact_repeat, agents
+
+
 def command_adopt_plan(args, config):
-    with open_database(config.database) as connection:
-        require_schema(connection, workflow=True)
-        with immediate_transaction(connection):
-            change = get_change(connection, args.change_id)
-            workflow = get_workflow(connection, args.workflow_id)
-            if change["status"] != "in_progress":
-                raise LedgerError("completed change is immutable")
-            if workflow["state"] != "active" or workflow["change_id"] != args.change_id:
-                raise LedgerError("adopt-plan requires the active workflow bound to change_id")
-
-            exact_repeat = (
-                workflow["current_stage"] == "tdd_coding"
-                and change["plan_ref"] == args.plan_ref
+    if args.dry_run:
+        with open_database(config.database, readonly=True) as connection:
+            change, workflow, _, agents = validate_plan_adoption(
+                connection, args, config
             )
-            if workflow["current_stage"] != "writing_plan" and not exact_repeat:
-                raise LedgerError("adopt-plan requires workflow current_stage writing_plan")
-
-            validate_stage_prerequisites(
-                config,
-                change,
-                "writing_plan",
-                enforce_impact_contract=not exact_repeat,
-            )
-            validate_reference(config, "plan_ref", args.plan_ref, args.change_id)
-            plan_text = read_vault_blob(
-                config, "plan_ref", args.plan_ref, args.change_id
-            )
-            validate_plan_document(plan_text)
-            if not exact_repeat:
-                spec_text = read_vault_blob(
-                    config, "spec_ref", change["spec_ref"], args.change_id
+        payload = {
+            "status": "validated",
+            "dry_run": True,
+            "candidate_plan_ref": args.plan_ref,
+            "change": dict(change),
+            "workflow": dict(workflow),
+            "agents": agents,
+            "would_write": {
+                "change_ledger.plan_ref": args.plan_ref,
+                "workflow_state.current_stage": "tdd_coding",
+            },
+        }
+    else:
+        with open_database(config.database) as connection:
+            with immediate_transaction(connection):
+                change, workflow, exact_repeat, agents = validate_plan_adoption(
+                    connection, args, config
                 )
-                validate_plan_compatibility_contract(spec_text, plan_text)
-            agents = validate_plan_execution_context(
-                config,
-                args.change_id,
-                change["spec_ref"],
-                args.plan_ref,
-            )
-
-            if exact_repeat:
-                payload = {
-                    "status": "adopted",
-                    "change": dict(change),
-                    "workflow": dict(workflow),
-                    "agents": agents,
-                }
-            else:
-                updated_change = connection.execute(
-                    "UPDATE change_ledger SET plan_ref=? "
-                    "WHERE change_id=? AND status='in_progress' AND change_ref=?",
-                    (
-                        args.plan_ref,
-                        args.change_id,
-                        change["change_ref"],
-                    ),
-                )
-                if updated_change.rowcount != 1:
-                    raise LedgerError("change changed concurrently")
-                updated_workflow = connection.execute(
-                    "UPDATE workflow_state SET current_stage='tdd_coding' "
-                    "WHERE workflow_id=? AND change_id=? AND state='active' "
-                    "AND current_stage='writing_plan'",
-                    (args.workflow_id, args.change_id),
-                )
-                if updated_workflow.rowcount != 1:
-                    raise LedgerError("workflow changed concurrently")
-                payload = {
-                    "status": "adopted",
-                    "change": dict(get_change(connection, args.change_id)),
-                    "workflow": dict(get_workflow(connection, args.workflow_id)),
-                    "agents": agents,
-                }
-    log("adopt-plan", "adopted", args.change_id, args.workflow_id)
+                if exact_repeat:
+                    payload = {
+                        "status": "adopted",
+                        "change": dict(change),
+                        "workflow": dict(workflow),
+                        "agents": agents,
+                    }
+                else:
+                    updated_change = connection.execute(
+                        "UPDATE change_ledger SET plan_ref=? "
+                        "WHERE change_id=? AND status='in_progress' AND change_ref=?",
+                        (
+                            args.plan_ref,
+                            args.change_id,
+                            change["change_ref"],
+                        ),
+                    )
+                    if updated_change.rowcount != 1:
+                        raise LedgerError("change changed concurrently")
+                    updated_workflow = connection.execute(
+                        "UPDATE workflow_state SET current_stage='tdd_coding' "
+                        "WHERE workflow_id=? AND change_id=? AND state='active' "
+                        "AND current_stage='writing_plan'",
+                        (args.workflow_id, args.change_id),
+                    )
+                    if updated_workflow.rowcount != 1:
+                        raise LedgerError("workflow changed concurrently")
+                    payload = {
+                        "status": "adopted",
+                        "change": dict(get_change(connection, args.change_id)),
+                        "workflow": dict(get_workflow(connection, args.workflow_id)),
+                        "agents": agents,
+                    }
+    log(
+        "adopt-plan",
+        "validated" if args.dry_run else "adopted",
+        args.change_id,
+        args.workflow_id,
+    )
     emit(payload)
 
 
 def command_complete(args, config):
     with open_database(config.database) as connection:
-        require_schema(connection)
+        require_schema(connection, workflow=True)
         with immediate_transaction(connection):
             row = get_change(connection, args.change_id)
             if row["status"] == "completed":
@@ -1633,7 +1936,7 @@ def command_complete(args, config):
                         "in_progress completion requires final --change-ref"
                     )
                 active_workflows = connection.execute(
-                    "SELECT workflow_id,current_stage FROM workflow_state "
+                    "SELECT workflow_id,current_stage,flow,review_mode FROM workflow_state "
                     "WHERE change_id=? AND state='active'",
                     (args.change_id,),
                 ).fetchall()
@@ -1641,49 +1944,31 @@ def command_complete(args, config):
                     raise LedgerError(
                         "active workflow must be at acceptance before completing its change"
                     )
-                final_fields = (
-                    "spec_ref",
-                    "plan_ref",
-                    "test_ref",
-                    "code_ref",
-                    "evidence_ref",
-                )
+                flow = active_workflows[0]["flow"] if active_workflows else "full"
+                final_fields = {
+                    "direct": ("code_ref",),
+                    "light": ("spec_ref", "code_ref"),
+                    "full": (
+                        "spec_ref",
+                        "plan_ref",
+                        "test_ref",
+                        "code_ref",
+                        "evidence_ref",
+                    ),
+                }[flow]
                 missing = [field for field in final_fields if not row[field]]
                 if missing:
                     raise LedgerError("missing required references: " + ", ".join(missing))
                 for field in final_fields:
                     validate_reference(config, field, row[field], args.change_id)
                 validate_reference(config, "change_ref", args.change_ref, args.change_id)
-                spec_text = read_vault_blob(
-                    config, "spec_ref", row["spec_ref"], args.change_id
+                registration_text = read_vault_blob(
+                    config, "change_ref", row["change_ref"], args.change_id
                 )
-                spec_baseline = validate_spec_document(spec_text)
-                validate_code_reference(config, spec_baseline)
-                plan_text = read_vault_blob(
-                    config, "plan_ref", row["plan_ref"], args.change_id
-                )
-                validate_plan_document(plan_text)
-                if not active_workflows:
-                    validate_plan_compatibility_contract(spec_text, plan_text)
-                test_text = read_vault_blob(
-                    config, "test_ref", row["test_ref"], args.change_id
-                )
-                evidence_text = read_vault_blob(
-                    config, "evidence_ref", row["evidence_ref"], args.change_id
-                )
-                validate_acceptance_report_contract(
-                    test_text,
-                    evidence_text,
+                registration_fields = validate_change_document(
+                    registration_text,
                     args.change_id,
-                    row["test_ref"],
-                    row["code_ref"],
-                    require_passed=True,
-                )
-                validate_plan_execution_context(
-                    config,
-                    args.change_id,
-                    row["spec_ref"],
-                    row["plan_ref"],
+                    final=False,
                 )
                 change_text = read_vault_blob(
                     config, "change_ref", args.change_ref, args.change_id
@@ -1693,24 +1978,75 @@ def command_complete(args, config):
                     args.change_id,
                     final=True,
                 )
-                validate_final_change_logic_link(change_text, args.change_id)
-                for field in ("spec_ref", "plan_ref", "test_ref", "code_ref", "evidence_ref"):
+                if change_fields["source_ce"] != registration_fields["source_ce"]:
+                    raise LedgerError(
+                        "final change document source_ce must match registration source_ce"
+                    )
+                for field in final_fields:
                     if change_fields.get(field) != row[field]:
                         raise LedgerError(
                             f"final change document {field} does not exactly match the ledger"
                         )
-                _, final_change_sha = split_reference(
-                    args.change_ref,
-                    "vault-relative-path",
-                )
-                logic_path = f"logic/{args.change_id}.md"
-                logic_text = read_vault_path_at_commit(
-                    config,
-                    final_change_sha,
-                    logic_path,
-                    "final logic draft",
-                )
-                validate_final_logic_document(logic_text, args.change_id)
+                if flow == "light":
+                    validate_light_spec_document(
+                        read_vault_blob(
+                            config, "spec_ref", row["spec_ref"], args.change_id
+                        )
+                    )
+                    validate_history_summary(
+                        change_text,
+                        expected_source_ce=change_fields["source_ce"],
+                    )
+                elif flow == "direct":
+                    validate_history_summary(
+                        change_text,
+                        expected_source_ce=change_fields["source_ce"],
+                    )
+                else:
+                    spec_text = read_vault_blob(
+                        config, "spec_ref", row["spec_ref"], args.change_id
+                    )
+                    spec_baseline = validate_spec_document(spec_text)
+                    validate_code_reference(config, spec_baseline)
+                    plan_text = read_vault_blob(
+                        config, "plan_ref", row["plan_ref"], args.change_id
+                    )
+                    validate_plan_document(plan_text)
+                    if not active_workflows:
+                        validate_plan_compatibility_contract(spec_text, plan_text)
+                    test_text = read_vault_blob(
+                        config, "test_ref", row["test_ref"], args.change_id
+                    )
+                    evidence_text = read_vault_blob(
+                        config, "evidence_ref", row["evidence_ref"], args.change_id
+                    )
+                    validate_acceptance_report_contract(
+                        test_text,
+                        evidence_text,
+                        args.change_id,
+                        row["test_ref"],
+                        row["code_ref"],
+                        require_passed=True,
+                    )
+                    validate_plan_execution_context(
+                        config,
+                        args.change_id,
+                        row["spec_ref"],
+                        row["plan_ref"],
+                    )
+                    validate_final_change_logic_link(change_text, args.change_id)
+                    _, final_change_sha = split_reference(
+                        args.change_ref,
+                        "vault-relative-path",
+                    )
+                    logic_path = f"logic/{args.change_id}.md"
+                    logic_text = read_vault_path_at_commit(
+                        config,
+                        final_change_sha,
+                        logic_path,
+                        "final logic draft",
+                    )
+                    validate_final_logic_document(logic_text, args.change_id)
                 updated = connection.execute(
                     "UPDATE change_ledger SET change_ref=?,status='completed' "
                     "WHERE change_id=? AND status='in_progress' AND change_ref=?",
@@ -1718,6 +2054,12 @@ def command_complete(args, config):
                 )
                 if updated.rowcount != 1:
                     raise LedgerError("change changed concurrently")
+                connection.execute(
+                    "UPDATE workflow_state SET current_stage='completed',"
+                    "review_mode='manual',state='closed' "
+                    "WHERE change_id=? AND state='active'",
+                    (args.change_id,),
+                )
                 payload = {
                     "change_id": args.change_id,
                     "change_ref": args.change_ref,
@@ -1759,21 +2101,37 @@ def command_workflow_create(args, config):
                 raise LedgerError("workflow_id must use WF-0001 format")
             if workflow_id != expected:
                 raise LedgerError(f"next available workflow_id is {expected}")
+            stage = args.stage
             if args.change_id:
                 change = get_change(connection, args.change_id)
                 if change["status"] != "in_progress":
                     raise LedgerError("workflow can bind only to an in-progress change")
-                if args.stage != "writing_spec":
-                    raise LedgerError("a newly bound workflow must start at writing_spec")
-                validate_stage_prerequisites(config, change, args.stage)
-            elif args.stage not in PRE_EVENT_STAGES:
+                expected_stage = initial_bound_stage(args.flow)
+                stage = stage or expected_stage
+                if stage != expected_stage:
+                    raise LedgerError(
+                        f"a newly bound {args.flow} workflow must start at {expected_stage}"
+                    )
+                validate_stage_prerequisites(config, change, stage, flow=args.flow)
+            else:
+                stage = stage or "requirement_discussion"
+            if not args.change_id and stage not in PRE_EVENT_STAGES:
                 raise LedgerError("unbound workflow must use a pre-event stage")
             connection.execute(
-                "INSERT INTO workflow_state VALUES (?,?,?,'active')",
-                (workflow_id, args.change_id, args.stage),
+                "INSERT INTO workflow_state VALUES (?,?,?,?,?,'active')",
+                (workflow_id, args.change_id, stage, args.flow, args.review_mode),
             )
     log("workflow-create", "active", args.change_id, workflow_id)
-    emit({"workflow_id": workflow_id, "change_id": args.change_id, "current_stage": args.stage, "state": "active"})
+    emit(
+        {
+            "workflow_id": workflow_id,
+            "change_id": args.change_id,
+            "current_stage": stage,
+            "flow": args.flow,
+            "review_mode": args.review_mode,
+            "state": "active",
+        }
+    )
 
 
 def command_workflow_bind(args, config):
@@ -1792,9 +2150,9 @@ def command_workflow_bind(args, config):
                 raise LedgerError(f"workflow is already bound to {workflow['change_id']}")
             else:
                 updated = connection.execute(
-                    "UPDATE workflow_state SET change_id=?,current_stage='writing_spec' "
+                    "UPDATE workflow_state SET change_id=?,current_stage=? "
                     "WHERE workflow_id=? AND state='active' AND change_id IS NULL",
-                    (args.change_id, args.workflow_id),
+                    (args.change_id, initial_bound_stage(workflow["flow"]), args.workflow_id),
                 )
                 if updated.rowcount != 1:
                     raise LedgerError("workflow changed concurrently")
@@ -1809,14 +2167,18 @@ def command_workflow_set_stage(args, config):
             workflow = get_workflow(connection, args.workflow_id)
             if workflow["state"] != "active":
                 raise LedgerError("closed workflow is immutable")
-            allowed = PRE_EVENT_STAGES if workflow["change_id"] is None else FORMAL_STAGES
+            allowed = (
+                PRE_EVENT_STAGES
+                if workflow["change_id"] is None
+                else formal_stages_for_flow(workflow["flow"])
+            )
             if args.stage not in allowed:
                 raise LedgerError("stage violates workflow binding invariant")
             if workflow["change_id"] is not None:
-                current_index = FORMAL_STAGES.index(workflow["current_stage"])
-                target_index = FORMAL_STAGES.index(args.stage)
-                tdd_index = FORMAL_STAGES.index("tdd_coding")
-                if current_index < tdd_index <= target_index:
+                current_index = allowed.index(workflow["current_stage"])
+                target_index = allowed.index(args.stage)
+                tdd_index = allowed.index("tdd_coding")
+                if workflow["flow"] == "full" and current_index < tdd_index <= target_index:
                     raise LedgerError(
                         "entering or skipping over tdd_coding requires the atomic adopt-plan command"
                     )
@@ -1825,6 +2187,7 @@ def command_workflow_set_stage(args, config):
                         config,
                         get_change(connection, workflow["change_id"]),
                         args.stage,
+                        flow=workflow["flow"],
                     )
             updated = connection.execute(
                 "UPDATE workflow_state SET current_stage=? WHERE workflow_id=? AND state='active'",
@@ -1834,6 +2197,37 @@ def command_workflow_set_stage(args, config):
                 raise LedgerError("workflow changed concurrently")
             payload = dict(get_workflow(connection, args.workflow_id))
     log("workflow-set-stage", "active", payload["change_id"], args.workflow_id)
+    emit(payload)
+
+
+def command_workflow_set_controls(args, config):
+    if args.flow is None and args.review_mode is None:
+        raise LedgerError("workflow-set-controls requires --flow or --review-mode")
+    with open_database(config.database) as connection:
+        require_schema(connection, workflow=True)
+        with immediate_transaction(connection):
+            workflow = get_workflow(connection, args.workflow_id)
+            if workflow["state"] != "active":
+                raise LedgerError("closed workflow is immutable")
+            flow = args.flow or workflow["flow"]
+            review_mode = args.review_mode or workflow["review_mode"]
+            stage = workflow["current_stage"]
+            if args.flow is not None and args.flow != workflow["flow"] and workflow["change_id"]:
+                if args.flow == "direct":
+                    stage = "acceptance" if stage == "acceptance" else "tdd_coding"
+                elif args.flow == "light":
+                    stage = "acceptance" if stage == "acceptance" else "writing_spec"
+                else:
+                    stage = "writing_spec"
+            updated = connection.execute(
+                "UPDATE workflow_state SET current_stage=?,flow=?,review_mode=? "
+                "WHERE workflow_id=? AND state='active'",
+                (stage, flow, review_mode, args.workflow_id),
+            )
+            if updated.rowcount != 1:
+                raise LedgerError("workflow changed concurrently")
+            payload = dict(get_workflow(connection, args.workflow_id))
+    log("workflow-set-controls", "active", payload["change_id"], args.workflow_id)
     emit(payload)
 
 
@@ -1850,7 +2244,7 @@ def command_workflow_close(args, config):
                 if get_change(connection, workflow["change_id"])["status"] != "completed":
                     raise LedgerError("change must be completed before closing workflow")
                 updated = connection.execute(
-                    "UPDATE workflow_state SET current_stage='completed',state='closed' "
+                    "UPDATE workflow_state SET current_stage='completed',review_mode='manual',state='closed' "
                     "WHERE workflow_id=? AND state='active'",
                     (args.workflow_id,),
                 )
@@ -1902,6 +2296,7 @@ def build_parser() -> argparse.ArgumentParser:
     create = commands.add_parser("create")
     create.add_argument("--change-id")
     create.add_argument("--change-ref", required=True)
+    create.add_argument("--source-ce", required=True)
     create.add_argument("--spec-ref")
     commands.add_parser("next-id")
     resolve_code_ref = commands.add_parser("resolve-code-ref")
@@ -1918,6 +2313,7 @@ def build_parser() -> argparse.ArgumentParser:
     adopt_plan.add_argument("change_id")
     adopt_plan.add_argument("--workflow-id", required=True)
     adopt_plan.add_argument("--plan-ref", required=True)
+    adopt_plan.add_argument("--dry-run", action="store_true")
     show = commands.add_parser("show")
     show.add_argument("change_id")
     complete = commands.add_parser("complete")
@@ -1928,13 +2324,19 @@ def build_parser() -> argparse.ArgumentParser:
     workflow_create = commands.add_parser("workflow-create")
     workflow_create.add_argument("--workflow-id")
     workflow_create.add_argument("--change-id")
-    workflow_create.add_argument("--stage", choices=WORKFLOW_STAGES, default="requirement_discussion")
+    workflow_create.add_argument("--stage", choices=WORKFLOW_STAGES)
+    workflow_create.add_argument("--flow", choices=FLOWS, default="full")
+    workflow_create.add_argument("--review-mode", choices=REVIEW_MODES, default="manual")
     workflow_bind = commands.add_parser("workflow-bind-change")
     workflow_bind.add_argument("workflow_id")
     workflow_bind.add_argument("change_id")
     workflow_stage = commands.add_parser("workflow-set-stage")
     workflow_stage.add_argument("workflow_id")
     workflow_stage.add_argument("--stage", required=True, choices=WORKFLOW_STAGES)
+    workflow_controls = commands.add_parser("workflow-set-controls")
+    workflow_controls.add_argument("workflow_id")
+    workflow_controls.add_argument("--flow", choices=FLOWS)
+    workflow_controls.add_argument("--review-mode", choices=REVIEW_MODES)
     for name in ("workflow-close", "workflow-show", "workflow-status"):
         command = commands.add_parser(name)
         command.add_argument("workflow_id")
@@ -1958,6 +2360,7 @@ COMMANDS = {
     "workflow-create": command_workflow_create,
     "workflow-bind-change": command_workflow_bind,
     "workflow-set-stage": command_workflow_set_stage,
+    "workflow-set-controls": command_workflow_set_controls,
     "workflow-close": command_workflow_close,
     "workflow-show": command_workflow_show,
     "workflow-list": command_workflow_list,
