@@ -74,7 +74,7 @@
 
 确认前不得修改、保存或提交 Spec/Plan；确认前不得修改生产代码或测试代码；确认前不得移动 `current_stage`、启动实现器、创建代码 commit、更新 `code_ref`，也不得把评估写成新的 SQLite 状态或正式材料。
 
-用户要求调整评估时，继续使用同一组不可变引用修订评估并再次等待确认。只有当前对话明确确认的版本，才能作为后续 `writing-specs`、`writing-plans`、Plan reviewer、`adopt-plan` 或 TDD 路由的范围输入。旧对话、持久游标、既有 Plan 批准和旧执行授权都不能恢复本次确认。
+用户要求调整评估时，继续使用同一组不可变引用修订评估并再次等待确认。只有当前对话明确确认的版本，才能作为后续 `writing-specs`、`writing-lean-plans`、Plan reviewer、`adopt-plan` 或 TDD 路由的范围输入。旧对话、持久游标、既有 Plan 批准和旧执行授权都不能恢复本次确认。
 
 ## 确认后的路由
 

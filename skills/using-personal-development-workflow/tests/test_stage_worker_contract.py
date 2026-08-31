@@ -83,14 +83,14 @@ class StageWorkerContractTests(unittest.TestCase):
         ):
             self.assertIn(required, implementation_prompt)
 
-    def test_spec_worker_keeps_confirmation_and_publication_with_controller(self):
+    def test_spec_worker_keeps_mode_aware_adoption_and_publication_with_controller(self):
         prompt = SPEC_PROMPT.read_text(encoding="utf-8")
         for required in (
             "writing-specs",
             "spec_worker",
             "candidate.md",
-            "用户确认前不得写入 `specs/<change_id>.md`",
-            "主 Agent 完整展示",
+            "当前模式的采用门禁完成前不得写入 `specs/<change_id>.md`",
+            "自动采用当前 `candidate_sha256`",
             "spec_ref",
             "test_ref",
         ):
@@ -99,29 +99,30 @@ class StageWorkerContractTests(unittest.TestCase):
         for required in (
             "Spec Worker",
             "spec-worker-prompt.md",
-            "用户确认后",
+            "采用后",
             "`spec_ref` 与 `test_ref`",
         ):
             self.assertIn(required, self.spec_stage)
 
-    def test_plan_worker_requires_review_then_controller_and_user_approval(self):
+    def test_plan_worker_requires_review_then_controller_and_mode_aware_adoption(self):
         prompt = PLAN_PROMPT.read_text(encoding="utf-8")
         for required in (
             "plan_worker",
             "writing-lean-plans",
-            "writing-plans",
             "独立 reviewer",
             "Approved",
             "主 Agent",
-            "用户确认",
+            "`review_mode=auto`",
             "不得调用 `adopt-plan`",
         ):
             self.assertIn(required, prompt)
+        self.assertNotIn("writing-plans", prompt)
+        self.assertNotIn("plan_profile", prompt)
 
         planning = self.plan_stage.split("## 固定采用顺序", 1)[1].split("```", 2)[1]
         review_index = planning.index("独立语义 reviewer Approved")
         controller_index = planning.index("主 Agent 审核")
-        user_index = planning.index("用户确认")
+        user_index = planning.index("manual 用户确认 / auto 总控采用")
         adopt_index = planning.index("managing-change-ledger adopt-plan")
         self.assertLess(review_index, controller_index)
         self.assertLess(controller_index, user_index)

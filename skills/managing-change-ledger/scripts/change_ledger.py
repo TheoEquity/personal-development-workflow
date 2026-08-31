@@ -1002,7 +1002,11 @@ def parse_contract_table(
     return parsed
 
 
-def validate_spec_document(text: str) -> str:
+def validate_spec_document(
+    text: str,
+    *,
+    allow_legacy_missing_impact: bool = False,
+) -> None:
     visible = strip_fenced_blocks(text)
     lines = visible.splitlines()
     if not any(re.fullmatch(r"# Spec[：:].+", line.strip()) for line in lines):
@@ -1013,8 +1017,9 @@ def validate_spec_document(text: str) -> str:
         "## 行为规则",
         "## 输出与状态变化",
         "## 边界",
-        "## 可能的影响范围（非行为契约）",
     )
+    if not allow_legacy_missing_impact:
+        headings += ("## 既有功能与流程影响",)
     bodies = ordered_section_bodies(visible, headings, "spec")
     for heading in headings:
         if heading != "## 行为规则":
@@ -1048,30 +1053,26 @@ def validate_spec_document(text: str) -> str:
                 else len(rule_lines)
             )
             require_meaningful(rule_lines[field_start:field_end], f"spec rule {marker}")
-
-    impact_lines = bodies["## 可能的影响范围（非行为契约）"]
-    baseline_matches = [
-        re.fullmatch(r"\s*-\s*代码基线：`([^`]+)`\s*", line)
-        for line in impact_lines
-    ]
-    baselines = [match.group(1) for match in baseline_matches if match]
-    if len(baselines) != 1:
-        raise LedgerError("spec impact range must contain one parseable code baseline")
-    split_reference(baselines[0], "repository")
-    table_rows = []
-    for line in impact_lines:
-        if line.strip().startswith("|") and line.strip().endswith("|"):
-            table_rows.append([cell.strip() for cell in line.strip()[1:-1].split("|")])
-    candidates = [
-        row
-        for row in table_rows[2:]
-        if len(row) == 4
-        and all(cell and not re.fullmatch(r"-+", cell) for cell in row)
-        and not any(PLACEHOLDER_PATTERN.search(cell) for cell in row)
-    ]
-    if not candidates:
-        raise LedgerError("spec impact range must contain at least one concrete candidate")
-    return baselines[0]
+    impact_count = sum(
+        line.strip() == "## 既有功能与流程影响" for line in lines
+    )
+    if allow_legacy_missing_impact:
+        if impact_count > 1:
+            raise LedgerError(
+                "spec may contain at most one ## 既有功能与流程影响 section"
+            )
+        if impact_count == 1:
+            require_meaningful(
+                single_section_body(
+                    visible,
+                    "## 既有功能与流程影响",
+                    "spec",
+                ),
+                "spec ## 既有功能与流程影响",
+            )
+        return
+    if "## 可能的影响范围（非行为契约）" in visible or "代码基线：" in visible:
+        raise LedgerError("full spec must not contain code impact range or code baseline")
 
 
 def validate_light_spec_document(text: str) -> None:
@@ -1101,6 +1102,27 @@ def validate_light_spec_document(text: str) -> None:
         raise LedgerError("light spec must not include full-profile impact sections")
 
 
+def is_support_only_plan_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").strip().lower()
+    segments = tuple(part for part in normalized.split("/") if part)
+    name = segments[-1] if segments else ""
+    if any(part in {"test", "tests", "spec", "specs", "docs", "doc"} for part in segments[:-1]):
+        return True
+    if name.startswith(("test_", "readme", "changelog", "license")):
+        return True
+    if re.search(r"(?:^|[._-])(?:test|spec)(?:[._-]|$)", name):
+        return True
+    if Path(name).suffix in {".md", ".rst", ".adoc", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf"}:
+        return True
+    return name in {
+        ".editorconfig",
+        ".gitignore",
+        ".gitattributes",
+        "dockerfile",
+        "makefile",
+    }
+
+
 def validate_spec_impact_contract(text: str) -> dict[str, str]:
     heading = "## 既有功能与流程影响"
     lines = single_section_body(text, heading, "spec")
@@ -1111,12 +1133,7 @@ def validate_spec_impact_contract(text: str) -> dict[str, str]:
     impact_position = next(
         index for index, line in enumerate(visible_lines) if line.strip() == heading
     )
-    code_impact_position = next(
-        index
-        for index, line in enumerate(visible_lines)
-        if line.strip() == "## 可能的影响范围（非行为契约）"
-    )
-    if not boundary_position < impact_position < code_impact_position:
+    if not boundary_position < impact_position:
         raise LedgerError("spec impact sections must use the canonical order")
     meaningful = [line.strip() for line in lines if line.strip()]
     no_impact = "- 结论：未发现与本需求直接关联的既有功能或流程。"
@@ -1154,7 +1171,9 @@ def validate_spec_impact_contract(text: str) -> dict[str, str]:
     return impact_conclusions
 
 
-def validate_plan_document(text: str) -> tuple[str, ...]:
+def validate_legacy_plan_document(text: str) -> tuple[str, ...]:
+    """Validate the Plan grammar that was accepted before Lean became mandatory."""
+
     visible = strip_fenced_blocks(text)
     if PLAN_PLACEHOLDER_PATTERN.search(visible):
         raise LedgerError("plan must not contain placeholders")
@@ -1173,7 +1192,9 @@ def validate_plan_document(text: str) -> tuple[str, ...]:
             raise LedgerError(f"plan must contain one non-empty {field} field")
         require_meaningful([matches[0][1]], f"plan {field}")
         field_positions.append(matches[0][0])
-    global_matches = [index for index, line in enumerate(lines) if line.strip() == "## Global Constraints"]
+    global_matches = [
+        index for index, line in enumerate(lines) if line.strip() == "## Global Constraints"
+    ]
     if len(global_matches) != 1 or field_positions != sorted(field_positions):
         raise LedgerError("plan header fields must use the canonical order")
     task_matches = [
@@ -1202,8 +1223,7 @@ def validate_plan_document(text: str) -> tuple[str, ...]:
         task_matches[0][0],
     )
     require_meaningful(
-        lines[global_matches[0] + 1 : global_end],
-        "plan Global Constraints",
+        lines[global_matches[0] + 1 : global_end], "plan Global Constraints"
     )
     target_paths: list[str] = []
     for task_index, (start, _) in enumerate(task_matches):
@@ -1229,18 +1249,12 @@ def validate_plan_document(text: str) -> tuple[str, ...]:
         consumes = [
             match.group(1)
             for line in interface_text
-            if (match := re.fullmatch(
-                r"\s*-\s*Consumes:\s*(\S(?:.*\S)?)\s*",
-                line,
-            ))
+            if (match := re.fullmatch(r"\s*-\s*Consumes:\s*(\S(?:.*\S)?)\s*", line))
         ]
         produces = [
             match.group(1)
             for line in interface_text
-            if (match := re.fullmatch(
-                r"\s*-\s*Produces:\s*(\S(?:.*\S)?)\s*",
-                line,
-            ))
+            if (match := re.fullmatch(r"\s*-\s*Produces:\s*(\S(?:.*\S)?)\s*", line))
         ]
         checkboxes = [
             line
@@ -1254,9 +1268,206 @@ def validate_plan_document(text: str) -> tuple[str, ...]:
     return tuple(target_paths)
 
 
+def validate_plan_document(
+    text: str,
+    *,
+    user_confirmed_task_count_exception: bool = False,
+    require_task_count_confirmation: bool = False,
+    allow_legacy_adopted: bool = False,
+) -> tuple[str, ...]:
+    if allow_legacy_adopted:
+        return validate_legacy_plan_document(text)
+    visible = strip_fenced_blocks(text)
+    if PLAN_PLACEHOLDER_PATTERN.search(visible):
+        raise LedgerError("plan must not contain placeholders")
+    lines = visible.splitlines()
+    h1 = [line for line in lines if re.fullmatch(r"# .+ Implementation Plan", line.strip())]
+    if len(h1) != 1:
+        raise LedgerError("plan must contain one named # ... Implementation Plan heading")
+    profile_markers = [
+        line
+        for line in lines
+        if re.fullmatch(r">\s*\*\*Plan profile:\*\*\s*lean\s*", line.strip())
+    ]
+    if len(profile_markers) != 1:
+        raise LedgerError("plan must contain one > **Plan profile:** lean marker")
+    field_positions: list[int] = []
+    for field in ("Goal", "Architecture", "Tech Stack", "Spec", "Acceptance"):
+        matches = [
+            (index, match.group(1))
+            for index, line in enumerate(lines)
+            if (match := re.fullmatch(rf"\*\*{re.escape(field)}:\*\*\s*(.+?)\s*", line))
+        ]
+        if len(matches) != 1:
+            raise LedgerError(f"plan must contain one non-empty {field} field")
+        require_meaningful([matches[0][1]], f"plan {field}")
+        field_positions.append(matches[0][0])
+    global_matches = [index for index, line in enumerate(lines) if line.strip() == "## Global Constraints"]
+    if len(global_matches) != 1 or field_positions != sorted(field_positions):
+        raise LedgerError("plan header fields must use the canonical order")
+    task_matches = [
+        (index, match.group(1))
+        for index, line in enumerate(lines)
+        if (match := re.fullmatch(r"### Task (\d+):\s*.+", line.strip()))
+    ]
+    if not task_matches:
+        raise LedgerError("plan must contain at least one named Task N")
+    task_numbers = [task_number for _, task_number in task_matches]
+    if any(
+        int(task_number) < 1 or task_number != str(int(task_number))
+        for task_number in task_numbers
+    ):
+        raise LedgerError("plan Task N numbers must use canonical decimal integers from 1")
+    if len(task_numbers) != len(set(task_numbers)):
+        raise LedgerError("plan must not contain duplicate Task N numbers")
+    if len(task_numbers) > 3:
+        if require_task_count_confirmation and not user_confirmed_task_count_exception:
+            raise LedgerError(
+                "plan exceeds the default maximum of 3 Tasks; explicit user confirmation is required"
+            )
+        exception_rows = parse_contract_table(
+            single_section_body(text, "## Task 数量例外", "plan"),
+            ("Task", "不能合并原因", "边界类型"),
+            "plan Task 数量例外",
+        )
+        exception_tasks: list[str] = []
+        exception_reasons: list[str] = []
+        for row in exception_rows:
+            task_match = re.fullmatch(r"Task ([1-9][0-9]*)", row["Task"])
+            if task_match is None:
+                raise LedgerError("plan Task 数量例外 must reference canonical Task N")
+            if row["边界类型"] not in ("独立交付", "依赖", "风险"):
+                raise LedgerError(
+                    "plan Task 数量例外 boundary must be 独立交付, 依赖, or 风险"
+                )
+            exception_tasks.append(task_match.group(1))
+            reason = " ".join(row["不能合并原因"].split()).casefold()
+            if len(reason) < 16:
+                raise LedgerError(
+                    "plan Task 数量例外 rationales must be concrete and unique"
+                )
+            exception_reasons.append(reason)
+        if (
+            len(exception_tasks) != len(set(exception_tasks))
+            or set(exception_tasks) != set(task_numbers)
+        ):
+            raise LedgerError(
+                "plan Task 数量例外 must contain one rationale row for every Task"
+            )
+        if len(exception_reasons) != len(set(exception_reasons)):
+            raise LedgerError(
+                "plan Task 数量例外 rationales must be concrete and unique"
+            )
+    if global_matches[0] >= task_matches[0][0]:
+        raise LedgerError("plan Global Constraints must precede tasks")
+    global_end = next(
+        (
+            index
+            for index in range(global_matches[0] + 1, task_matches[0][0] + 1)
+            if re.fullmatch(r"(?:##\s+.+|### Task [0-9]+:\s*.+)", lines[index].strip())
+        ),
+        task_matches[0][0],
+    )
+    require_meaningful(
+        lines[global_matches[0] + 1 : global_end],
+        "plan Global Constraints",
+    )
+    target_paths: list[str] = []
+    for task_index, (start, _) in enumerate(task_matches):
+        end = task_matches[task_index + 1][0] if task_index + 1 < len(task_matches) else len(lines)
+        task_lines = lines[start + 1 : end]
+        outcomes = [
+            index
+            for index, line in enumerate(task_lines)
+            if re.fullmatch(r"\*\*Outcome:\*\*\s*\S(?:.*\S)?\s*", line.strip())
+        ]
+        files = [index for index, line in enumerate(task_lines) if line.strip() == "**Files:**"]
+        interfaces = [
+            index for index, line in enumerate(task_lines) if line.strip() == "**Interfaces:**"
+        ]
+        implementation_notes = [
+            index
+            for index, line in enumerate(task_lines)
+            if line.strip() == "**Implementation notes:**"
+        ]
+        test_goals = [
+            index
+            for index, line in enumerate(task_lines)
+            if re.fullmatch(r"\*\*Test goal:\*\*\s*\S(?:.*\S)?\s*", line.strip())
+        ]
+        if (
+            len(outcomes) != 1
+            or len(files) != 1
+            or len(interfaces) != 1
+            or len(implementation_notes) != 1
+            or len(test_goals) != 1
+            or not outcomes[0]
+            < files[0]
+            < interfaces[0]
+            < implementation_notes[0]
+            < test_goals[0]
+        ):
+            raise LedgerError(
+                "each lean plan task must contain ordered Outcome, Files, Interfaces, Implementation notes, and Test goal blocks"
+            )
+        file_entries = [
+            (match.group(1), match.group(2))
+            for line in task_lines[files[0] + 1 : interfaces[0]]
+            if (match := re.fullmatch(
+                r"\s*-\s*(Create|Modify|Test):\s*`([^`]+)`\s*", line
+            ))
+        ]
+        if not file_entries:
+            raise LedgerError("each plan task must name at least one exact file")
+        if not any(
+            action in {"Create", "Modify"} and not is_support_only_plan_path(path)
+            for action, path in file_entries
+        ):
+            raise LedgerError(
+                "each plan task must include at least one production Create or Modify target; tests, docs, and configuration stay with that vertical task"
+            )
+        target_paths.extend(path for _, path in file_entries)
+        interface_text = task_lines[interfaces[0] + 1 : implementation_notes[0]]
+        consumes = [
+            match.group(1)
+            for line in interface_text
+            if (match := re.fullmatch(
+                r"\s*-\s*Consumes:\s*(\S(?:.*\S)?)\s*",
+                line,
+            ))
+        ]
+        produces = [
+            match.group(1)
+            for line in interface_text
+            if (match := re.fullmatch(
+                r"\s*-\s*Produces:\s*(\S(?:.*\S)?)\s*",
+                line,
+            ))
+        ]
+        require_meaningful(
+            task_lines[implementation_notes[0] + 1 : test_goals[0]],
+            "plan task Implementation notes",
+        )
+        checkbox_numbers = [
+            match.group(1)
+            for line in task_lines
+            if (match := re.fullmatch(r"\s*- \[ \] \*\*Step (\d+):\s*.+\*\*\s*", line))
+        ]
+        if len(consumes) != 1 or len(produces) != 1:
+            raise LedgerError(
+                "each plan task must contain exactly one non-empty Consumes and Produces interface"
+            )
+        if checkbox_numbers not in (["1", "2", "3"], ["1", "2", "3", "4"]):
+            raise LedgerError(
+                "each lean plan task must contain ordered checkbox Step 1-3 and optional Step 4"
+            )
+    return tuple(target_paths)
+
+
 def validate_plan_compatibility_contract(
     spec_text: str,
     plan_text: str,
+    plan_baseline: str,
 ) -> None:
     spec_impacts = validate_spec_impact_contract(spec_text)
     spec_impact_ids = tuple(spec_impacts)
@@ -1293,10 +1504,9 @@ def validate_plan_compatibility_contract(
             )
         evidence = evidence_lines[0][len(evidence_prefix) :].strip()
         evidence_parts = tuple(part.strip() for part in evidence.split("|"))
-        expected_baseline = validate_spec_document(spec_text)
         if (
             len(evidence_parts) != 3
-            or evidence_parts[0] != expected_baseline
+            or evidence_parts[0] != plan_baseline
             or re.fullmatch(r"`[^`]+`", evidence_parts[1]) is None
         ):
             raise LedgerError(
@@ -1375,12 +1585,15 @@ def validate_plan_compatibility_contract(
 
 def validate_plan_baseline_contract(
     config: RuntimeConfig,
-    spec_text: str,
     plan_text: str,
-) -> None:
+    *,
+    require_compatibility_section: bool = True,
+    legacy_spec_text: str | None = None,
+) -> str:
     heading = "## 开发基线"
     lines = single_section_body(plan_text, heading, "plan")
     known_fields = {
+        "base_repository",
         "base_source",
         "base_locator",
         "base_sha",
@@ -1407,7 +1620,23 @@ def validate_plan_baseline_contract(
         require_meaningful([value], f"plan 开发基线 {key}")
         fields[key] = value
 
-    required = ("base_source", "base_locator", "base_sha")
+    if "base_repository" not in fields and legacy_spec_text is not None:
+        legacy_baselines = [
+            match.group(1)
+            for line in strip_fenced_blocks(legacy_spec_text).splitlines()
+            if (
+                match := re.fullmatch(
+                    r"\s*-\s*代码基线：`([^`]+)`\s*",
+                    line,
+                )
+            )
+        ]
+        if len(legacy_baselines) == 1:
+            fields["base_repository"], _ = split_reference(
+                legacy_baselines[0], "repository"
+            )
+
+    required = ("base_repository", "base_source", "base_locator", "base_sha")
     missing = [field for field in required if field not in fields]
     if missing:
         raise LedgerError("plan 开发基线 is missing " + ", ".join(missing))
@@ -1425,20 +1654,28 @@ def validate_plan_baseline_contract(
     baseline_position = next(
         index for index, line in enumerate(visible_lines) if line.strip() == heading
     )
-    compatibility_position = next(
+    compatibility_positions = [
         index
         for index, line in enumerate(visible_lines)
         if line.strip() == "## 实现兼容性分析"
-    )
+    ]
+    if len(compatibility_positions) > 1 or (
+        require_compatibility_section and len(compatibility_positions) != 1
+    ):
+        raise LedgerError("plan must contain one ## 实现兼容性分析 section")
     first_task_position = next(
         index
         for index, line in enumerate(visible_lines)
         if re.fullmatch(r"### Task [0-9]+:\s*.+", line.strip())
     )
-    if not global_position < baseline_position < compatibility_position < first_task_position:
+    if not global_position < baseline_position < first_task_position:
         raise LedgerError(
-            "plan 开发基线 must follow Global Constraints and precede compatibility analysis and tasks"
+            "plan 开发基线 must follow Global Constraints and precede plan tasks"
         )
+    if compatibility_positions and not (
+        baseline_position < compatibility_positions[0] < first_task_position
+    ):
+        raise LedgerError("plan compatibility analysis must precede plan tasks")
 
     source = fields["base_source"]
     if source == "remote":
@@ -1470,12 +1707,9 @@ def validate_plan_baseline_contract(
         if detached_sha != "null" and detached_sha.lower() != fields["base_sha"].lower():
             raise LedgerError("plan base_detached_sha must equal base_sha")
 
-    spec_baseline = validate_spec_document(spec_text)
-    repository_name, _ = split_reference(spec_baseline, "repository")
-    validate_code_reference(
-        config,
-        f"{repository_name}@{fields['base_sha'].lower()}",
-    )
+    plan_baseline = f"{fields['base_repository']}@{fields['base_sha'].lower()}"
+    validate_code_reference(config, plan_baseline)
+    return plan_baseline
 
 
 def resolve_plan_targets(code_repository: Path, plan_paths: tuple[str, ...]) -> tuple[Path, ...]:
@@ -1538,16 +1772,28 @@ def validate_plan_execution_context(
     change_id: str,
     spec_ref: str,
     plan_ref: str,
+    *,
+    allow_legacy_materials: bool = False,
 ) -> list[str]:
     if config.spec_vault is None:
         raise LedgerError("spec_vault is required to validate Plan execution context")
     spec_text = read_vault_blob(config, "spec_ref", spec_ref, change_id)
-    code_baseline = validate_spec_document(spec_text)
-    validate_code_reference(config, code_baseline)
+    validate_spec_document(
+        spec_text,
+        allow_legacy_missing_impact=allow_legacy_materials,
+    )
+    plan_text = read_vault_blob(config, "plan_ref", plan_ref, change_id)
+    code_baseline = validate_plan_baseline_contract(
+        config,
+        plan_text,
+        require_compatibility_section=not allow_legacy_materials,
+        legacy_spec_text=spec_text if allow_legacy_materials else None,
+    )
     repository_name, _ = split_reference(code_baseline, "repository")
     code_repository = resolve_code_repository(config, repository_name)
-    plan_text = read_vault_blob(config, "plan_ref", plan_ref, change_id)
-    plan_paths = validate_plan_document(plan_text)
+    plan_paths = validate_plan_document(
+        plan_text, allow_legacy_adopted=allow_legacy_materials
+    )
     targets = resolve_plan_targets(code_repository, plan_paths)
     workspace_root = Path(
         os.path.commonpath((str(config.spec_vault.resolve()), str(code_repository)))
@@ -1589,13 +1835,18 @@ def validate_stage_prerequisites(
         if flow == "light":
             validate_light_spec_document(spec_text)
         else:
-            spec_baseline = validate_spec_document(spec_text)
-            validate_code_reference(config, spec_baseline)
+            validate_spec_document(
+                spec_text,
+                allow_legacy_missing_impact=(
+                    target_stage != "writing_plan" or not enforce_impact_contract
+                ),
+            )
             if target_stage == "writing_plan" and enforce_impact_contract:
                 validate_spec_impact_contract(spec_text)
     if "plan_ref" in required:
         validate_plan_document(
-            read_vault_blob(config, "plan_ref", change["plan_ref"], change["change_id"])
+            read_vault_blob(config, "plan_ref", change["plan_ref"], change["change_id"]),
+            allow_legacy_adopted=True,
         )
     if "test_ref" in required:
         validate_test_draft_contract(
@@ -1607,6 +1858,7 @@ def validate_stage_prerequisites(
             change["change_id"],
             change["spec_ref"],
             change["plan_ref"],
+            allow_legacy_materials=True,
         )
 
 
@@ -1775,7 +2027,7 @@ def command_set_ref(args, config):
 def command_plan_adoption_contract(args, config):
     emit(
         {
-            "contract_version": 4,
+            "contract_version": 5,
             "command": "adopt-plan",
             "arguments": {
                 "change_id": {"format": "^CE-[0-9]{4,}$", "required": True},
@@ -1785,17 +2037,21 @@ def command_plan_adoption_contract(args, config):
                     "required": True,
                 },
                 "dry_run": {"required": False, "writes": False},
+                "user_confirmed_task_count_exception": {
+                    "required": False,
+                    "meaning": "the user explicitly approved a fully justified Plan with more than 3 Tasks",
+                },
             },
             "preconditions": [
                 "workflow is active and bound to change_id",
                 "workflow current_stage is writing_plan",
                 "change status is in_progress",
                 "spec_ref contains a valid existing-flow impact contract",
-                "candidate plan passes deterministic title, header, Task, Files, Interfaces, checkbox, and placeholder grammar",
+                "candidate plan uses the lean profile and passes deterministic title, header, Task, Files, Interfaces, checkbox, and placeholder grammar",
+                "candidate plan contains 1-3 Tasks unless every Task has an independent delivery, dependency, or risk rationale and the user explicitly confirms the exception",
                 "candidate plan covers all Spec impact_id values with no blocking rows",
                 "explicit Spec behavior changes map to adaptation or migration tasks",
-                "Spec code baseline is a full exact configured repository commit",
-                "candidate plan declares the same source-specific baseline with a full 40-character base_sha",
+                "candidate plan owns an exact configured repository and source-specific baseline with a full 40-character base_sha",
                 "all applicable AGENTS.md files for Plan targets are readable and inventoried",
             ],
             "atomic_writes": [
@@ -1824,22 +2080,29 @@ def validate_plan_adoption(connection, args, config):
     if workflow["current_stage"] != "writing_plan" and not exact_repeat:
         raise LedgerError("adopt-plan requires workflow current_stage writing_plan")
 
+    if exact_repeat:
+        validate_reference(config, "plan_ref", args.plan_ref, args.change_id)
+        return change, workflow, True, []
+
     validate_stage_prerequisites(
         config,
         change,
         "writing_plan",
         flow="full",
-        enforce_impact_contract=not exact_repeat,
+        enforce_impact_contract=True,
     )
     validate_reference(config, "plan_ref", args.plan_ref, args.change_id)
     plan_text = read_vault_blob(config, "plan_ref", args.plan_ref, args.change_id)
-    validate_plan_document(plan_text)
-    if not exact_repeat:
-        spec_text = read_vault_blob(
-            config, "spec_ref", change["spec_ref"], args.change_id
-        )
-        validate_plan_compatibility_contract(spec_text, plan_text)
-        validate_plan_baseline_contract(config, spec_text, plan_text)
+    validate_plan_document(
+        plan_text,
+        user_confirmed_task_count_exception=args.user_confirmed_task_count_exception,
+        require_task_count_confirmation=not args.dry_run,
+    )
+    spec_text = read_vault_blob(
+        config, "spec_ref", change["spec_ref"], args.change_id
+    )
+    plan_baseline = validate_plan_baseline_contract(config, plan_text)
+    validate_plan_compatibility_contract(spec_text, plan_text, plan_baseline)
     agents = validate_plan_execution_context(
         config,
         args.change_id,
@@ -2006,14 +2269,38 @@ def command_complete(args, config):
                     spec_text = read_vault_blob(
                         config, "spec_ref", row["spec_ref"], args.change_id
                     )
-                    spec_baseline = validate_spec_document(spec_text)
-                    validate_code_reference(config, spec_baseline)
+                    validate_spec_document(
+                        spec_text,
+                        allow_legacy_missing_impact=True,
+                    )
                     plan_text = read_vault_blob(
                         config, "plan_ref", row["plan_ref"], args.change_id
                     )
-                    validate_plan_document(plan_text)
-                    if not active_workflows:
-                        validate_plan_compatibility_contract(spec_text, plan_text)
+                    validate_plan_document(plan_text, allow_legacy_adopted=True)
+                    plan_baseline = validate_plan_baseline_contract(
+                        config,
+                        plan_text,
+                        require_compatibility_section=False,
+                        legacy_spec_text=spec_text,
+                    )
+                    current_lean_plan = any(
+                        re.fullmatch(
+                            r">\s*\*\*Plan profile:\*\*\s*lean\s*",
+                            line.strip(),
+                        )
+                        for line in strip_fenced_blocks(plan_text).splitlines()
+                    )
+                    if not active_workflows and current_lean_plan:
+                        validate_plan_document(plan_text)
+                        plan_baseline = validate_plan_baseline_contract(
+                            config,
+                            plan_text,
+                        )
+                        validate_plan_compatibility_contract(
+                            spec_text,
+                            plan_text,
+                            plan_baseline,
+                        )
                     test_text = read_vault_blob(
                         config, "test_ref", row["test_ref"], args.change_id
                     )
@@ -2033,6 +2320,7 @@ def command_complete(args, config):
                         args.change_id,
                         row["spec_ref"],
                         row["plan_ref"],
+                        allow_legacy_materials=True,
                     )
                     validate_final_change_logic_link(change_text, args.change_id)
                     _, final_change_sha = split_reference(
@@ -2314,6 +2602,10 @@ def build_parser() -> argparse.ArgumentParser:
     adopt_plan.add_argument("--workflow-id", required=True)
     adopt_plan.add_argument("--plan-ref", required=True)
     adopt_plan.add_argument("--dry-run", action="store_true")
+    adopt_plan.add_argument(
+        "--user-confirmed-task-count-exception",
+        action="store_true",
+    )
     show = commands.add_parser("show")
     show.add_argument("change_id")
     complete = commands.add_parser("complete")

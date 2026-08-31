@@ -19,7 +19,7 @@ EXPECTED_SKILLS = {
 }
 
 SUPERPOWERS_DEPENDENCIES = {
-    "writing-plans",
+    "writing-lean-plans",
     "using-git-worktrees",
     "subagent-driven-development",
     "executing-plans",

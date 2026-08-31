@@ -184,6 +184,55 @@ class AcceptanceReportValidationTests(unittest.TestCase):
         self.assertEqual([], result["not_executed_ids"])
         self.assertTrue(result["failure_handoff_valid"])
 
+    def test_reused_automation_evidence_is_structured_and_bound_to_code_ref(self):
+        evidence = {
+            "code_sha": CODE_SHA,
+            "command": "python -m unittest tests.test_sync",
+            "environment_fingerprint": "python-3.13-windows",
+            "input_fingerprint": "fixtures-v1-default-args",
+            "scope": "CE automated acceptance",
+            "result": "passed",
+            "produced_by": "delivery",
+        }
+        reused = (
+            "复用自动化证据："
+            + json.dumps(evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        )
+        reused_item = (*PASS_ITEM[:-1], reused)
+        second = (
+            "T-002",
+            "检查同步",
+            "passed",
+            "只创建一个 Issue。",
+            "已观察到一个 Issue。",
+            "2026-08-18T12:01:00Z | url | GitLab Issue",
+        )
+
+        result = self.validate(report(reused_item, second, overall="passed"))
+
+        self.assertEqual([evidence], result["reused_automation_evidence"])
+
+        stale = {**evidence, "code_sha": "3" * 40}
+        stale_item = (
+            *PASS_ITEM[:-1],
+            "复用自动化证据："
+            + json.dumps(stale, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        )
+        with self.assertRaises(acceptance_report.AcceptanceReportError):
+            self.validate(report(stale_item, second, overall="passed"))
+
+        serialized = json.dumps(
+            evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        duplicate_key = serialized.replace(
+            f'"code_sha":"{CODE_SHA}"',
+            f'"code_sha":"{CODE_SHA}","code_sha":"{CODE_SHA}"',
+            1,
+        )
+        duplicate_item = (*PASS_ITEM[:-1], "复用自动化证据：" + duplicate_key)
+        with self.assertRaises(acceptance_report.AcceptanceReportError):
+            self.validate(report(duplicate_item, second, overall="passed"))
+
     def test_failed_report_requires_and_normalizes_exact_handoff(self):
         result = self.validate(
             report(PASS_ITEM, FAIL_ITEM, overall="failed", handoff_rows=[FAIL_ROW])

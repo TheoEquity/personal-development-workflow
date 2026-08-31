@@ -46,8 +46,6 @@ ALLOWED_TRANSITIONS = {
 REQUIRED_INPUT_KEYS_BY_STAGE = {
     "writing_spec": {
         "change_ref",
-        "repository_path",
-        "code_sha",
         "related_formal_refs",
         "acceptance_steps_ref",
     },
@@ -55,7 +53,6 @@ REQUIRED_INPUT_KEYS_BY_STAGE = {
         "change_ref",
         "spec_ref",
         "test_ref",
-        "plan_profile",
         "repository_path",
         "base_source",
         "base_locator",
@@ -101,6 +98,15 @@ CONTRACT_KEYS = {
     "local_commit_authorized",
     "local_commit_scope",
     "finish_after_execution",
+}
+VERIFICATION_EVIDENCE_KEYS = {
+    "code_sha",
+    "command",
+    "environment_fingerprint",
+    "input_fingerprint",
+    "scope",
+    "result",
+    "produced_by",
 }
 
 
@@ -200,6 +206,17 @@ def _verify_same_git_repository(
 
 def _verify_commit(repository: Path, sha: str, field: str) -> None:
     _git(repository, "cat-file", "-e", f"{sha}^{{commit}}", field=field)
+
+
+def _repository_name(config: Mapping[str, Any], repository: Path) -> str:
+    matches = [
+        name
+        for name, configured_path in config["repositories"].items()
+        if configured_path == repository
+    ]
+    if len(matches) != 1:
+        raise ContractError("repository_path must map to exactly one configured repository")
+    return matches[0]
 
 
 def _verify_formal_ref(vault: Path, value: str, field: str) -> None:
@@ -452,25 +469,41 @@ def _prepare_stage_inputs(
             f"Missing required input_refs for {stage}: {', '.join(missing)}"
         )
 
-    repository = _resolve_existing_directory(refs["repository_path"], "repository_path")
-    if repository not in config["repositories"].values():
-        raise ContractError("repository_path is not declared in project configuration")
-    refs["repository_path"] = str(repository)
     refs["change_ref"] = _formal_ref(change_id, refs["change_ref"], "change_ref")
     _verify_formal_ref(config["vault"], refs["change_ref"], "change_ref")
 
     if stage == "writing_spec":
-        refs["code_sha"] = _require_full_sha(refs["code_sha"], "code_sha")
-        _verify_commit(repository, refs["code_sha"], "code_sha")
+        legacy_keys = {"repository_path", "code_sha"}.intersection(refs)
+        if legacy_keys:
+            if legacy_keys != {"repository_path", "code_sha"}:
+                raise ContractError(
+                    "legacy writing_spec inputs require both repository_path and code_sha"
+                )
+            repository = _resolve_existing_directory(
+                refs["repository_path"], "repository_path"
+            )
+            if repository not in config["repositories"].values():
+                raise ContractError(
+                    "repository_path is not declared in project configuration"
+                )
+            refs["repository_path"] = str(repository)
+            refs["code_sha"] = _require_full_sha(refs["code_sha"], "code_sha")
+            _verify_commit(repository, refs["code_sha"], "code_sha")
         return dict(sorted(refs.items()))
+
+    repository = _resolve_existing_directory(refs["repository_path"], "repository_path")
+    if repository not in config["repositories"].values():
+        raise ContractError("repository_path is not declared in project configuration")
+    refs["repository_path"] = str(repository)
 
     refs["spec_ref"] = _formal_ref(change_id, refs["spec_ref"], "spec_ref")
     refs["test_ref"] = _formal_ref(change_id, refs["test_ref"], "test_ref")
     _verify_formal_ref(config["vault"], refs["spec_ref"], "spec_ref")
     _verify_formal_ref(config["vault"], refs["test_ref"], "test_ref")
     if stage == "writing_plan":
-        if refs["plan_profile"] not in {"lean", "full"}:
-            raise ContractError("plan_profile must be lean or full")
+        if "plan_profile" in refs:
+            if refs["plan_profile"] not in {"lean", "full"}:
+                raise ContractError("legacy plan_profile must be lean or full")
         if refs["base_source"] not in {"local", "remote"}:
             raise ContractError("base_source must be local or remote")
         refs["base_sha"] = _require_full_sha(refs["base_sha"], "base_sha")
@@ -618,6 +651,15 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ContractError(f"JSON object contains duplicate key: {key}")
+        result[key] = value
+    return result
+
+
 def _read_regular_file(path: Path, field: str, *, allow_empty: bool = False) -> bytes:
     if path.is_symlink() or not path.is_file():
         raise ContractError(f"{field} must be a regular file: {path}")
@@ -625,6 +667,43 @@ def _read_regular_file(path: Path, field: str, *, allow_empty: bool = False) -> 
     if not allow_empty and not data:
         raise ContractError(f"{field} cannot be empty: {path}")
     return data
+
+
+def _validate_implementation_report_result(
+    report_data: bytes,
+    *,
+    artifact_ref: str,
+    review_status: str,
+    verification_evidence: Iterable[Mapping[str, Any]],
+) -> None:
+    try:
+        report_text = report_data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ContractError("report.md must be valid UTF-8") from exc
+    matches = re.findall(
+        r"(?ms)^## Structured Result[ \t]*(?:\r?\n)+```json[ \t]*\r?\n(.*?)\r?\n```[ \t]*(?=\r?\n|$)",
+        report_text,
+    )
+    if len(matches) != 1:
+        raise ContractError(
+            "implementation report.md must contain one ## Structured Result JSON block"
+        )
+    try:
+        structured = json.loads(matches[0], object_pairs_hook=_unique_json_object)
+    except json.JSONDecodeError as exc:
+        raise ContractError("implementation report structured result must be valid JSON") from exc
+    expected_keys = {"artifact_ref", "review_status", "verification_evidence"}
+    if not isinstance(structured, dict) or set(structured) != expected_keys:
+        raise ContractError("implementation report structured result has an invalid field set")
+    report_evidence = _normalize_verification_evidence(
+        structured["verification_evidence"]
+    )
+    if structured["artifact_ref"] != artifact_ref:
+        raise ContractError("implementation report artifact_ref mismatch")
+    if structured["review_status"] != review_status:
+        raise ContractError("implementation report review_status mismatch")
+    if report_evidence != list(verification_evidence):
+        raise ContractError("implementation report verification_evidence mismatch")
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -776,6 +855,14 @@ def _read_handoff(config_path: str | Path, handoff_path: str | Path) -> dict[str
         if candidate_sha != actual_sha:
             raise ContractError("candidate.md does not match candidate_sha256")
 
+    report_sha = payload.get("report_sha256")
+    if report_sha is not None and (
+        not isinstance(report_sha, str) or not DIGEST_RE.fullmatch(report_sha)
+    ):
+        raise ContractError("Invalid report_sha256")
+    evidence = _normalize_verification_evidence(payload.get("verification_evidence"))
+    payload["verification_evidence"] = evidence
+
     if stage == "implementation":
         _require_declared_path(
             payload, "authorization_offer_path", expected["offer"]
@@ -795,6 +882,39 @@ def _read_handoff(config_path: str | Path, handoff_path: str | Path) -> dict[str
             raise ContractError("authorization_offer digest mismatch")
         if payload.get("execution_contract_sha256") != _sha256_bytes(contract_data):
             raise ContractError("execution_contract digest mismatch")
+        if status == "complete":
+            workspace = Path(refs["workspace_path"])
+            workspace_head = _require_full_sha(
+                _git(workspace, "rev-parse", "HEAD", field="workspace_path HEAD"),
+                "workspace_path HEAD",
+            )
+            evidence = _normalize_verification_evidence(
+                evidence, expected_code_sha=workspace_head
+            )
+            if not evidence:
+                raise ContractError(
+                    "Completed implementation handoff requires verification_evidence"
+                )
+            repository = Path(refs["repository_path"])
+            expected_artifact = f"{_repository_name(config, repository)}@{workspace_head}"
+            if payload.get("artifact_ref") != expected_artifact:
+                raise ContractError(
+                    "Completed implementation artifact_ref must equal the workspace HEAD"
+                )
+            report_data = _read_regular_file(expected["report"], "report_path")
+            _validate_implementation_report_result(
+                report_data,
+                artifact_ref=expected_artifact,
+                review_status="Approved",
+                verification_evidence=evidence,
+            )
+            actual_report_sha = _sha256_bytes(report_data)
+            if report_sha != actual_report_sha:
+                raise ContractError("report.md does not match report_sha256")
+        elif report_sha is not None or evidence:
+            raise ContractError(
+                "report_sha256 and verification_evidence are only final on implementation complete"
+            )
     else:
         for field in (
             "authorization_offer_path",
@@ -804,6 +924,10 @@ def _read_handoff(config_path: str | Path, handoff_path: str | Path) -> dict[str
         ):
             if payload.get(field) is not None:
                 raise ContractError(f"{field} must be null outside implementation")
+        if report_sha is not None or evidence:
+            raise ContractError(
+                "report_sha256 and verification_evidence must be empty outside implementation"
+            )
     return payload
 
 
@@ -866,6 +990,8 @@ def init_handoff(
             "candidate_path": str(paths["candidate"]),
             "report_path": str(paths["report"]),
             "candidate_sha256": None,
+            "report_sha256": None,
+            "verification_evidence": [],
             "authorization_offer_path": offer_path,
             "execution_contract_path": contract_path,
             "authorization_offer_sha256": offer_sha,
@@ -942,6 +1068,71 @@ def _normalize_optional_string(value: Any, field: str) -> str | None:
     return _require_string(value, field)
 
 
+def _normalize_verification_evidence(
+    values: Iterable[Mapping[str, Any]] | None,
+    *,
+    expected_code_sha: str | None = None,
+) -> list[dict[str, str]]:
+    if values is None:
+        return []
+    if isinstance(values, (str, bytes, Mapping)):
+        raise ContractError("verification_evidence must be a list of objects")
+    normalized: list[dict[str, str]] = []
+    seen_keys: set[tuple[str, str, str, str]] = set()
+    for index, value in enumerate(values):
+        if not isinstance(value, Mapping) or set(value) != VERIFICATION_EVIDENCE_KEYS:
+            raise ContractError(
+                f"verification_evidence[{index}] has an invalid field set"
+            )
+        item = {
+            "code_sha": _require_full_sha(
+                value["code_sha"], f"verification_evidence[{index}].code_sha"
+            ),
+            "command": _require_string(
+                value["command"], f"verification_evidence[{index}].command"
+            ),
+            "environment_fingerprint": _require_string(
+                value["environment_fingerprint"],
+                f"verification_evidence[{index}].environment_fingerprint",
+            ),
+            "input_fingerprint": _require_string(
+                value["input_fingerprint"],
+                f"verification_evidence[{index}].input_fingerprint",
+            ),
+            "scope": _require_string(
+                value["scope"], f"verification_evidence[{index}].scope"
+            ),
+            "result": _require_string(
+                value["result"], f"verification_evidence[{index}].result"
+            ),
+            "produced_by": _require_string(
+                value["produced_by"],
+                f"verification_evidence[{index}].produced_by",
+            ),
+        }
+        if item["result"] != "passed":
+            raise ContractError("reusable verification evidence must have result=passed")
+        if item["produced_by"] != "task_implementer":
+            raise ContractError(
+                "implementation verification evidence must be produced_by=task_implementer"
+            )
+        if expected_code_sha is not None and item["code_sha"] != expected_code_sha:
+            raise ContractError(
+                "verification evidence code_sha must equal the implementation workspace HEAD"
+            )
+        reuse_key = (
+            item["code_sha"],
+            item["command"],
+            item["environment_fingerprint"],
+            item["input_fingerprint"],
+        )
+        if reuse_key in seen_keys:
+            raise ContractError("duplicate verification evidence reuse key")
+        seen_keys.add(reuse_key)
+        normalized.append(item)
+    return normalized
+
+
 def write_handoff(
     config_path: str | Path,
     handoff_path: str | Path,
@@ -954,6 +1145,7 @@ def write_handoff(
     needs_user_decision: Iterable[str] | None = None,
     blockers: Iterable[str] | None = None,
     confirmed_candidate_sha256: str | None = None,
+    verification_evidence: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Compare-and-swap one legal result transition while preserving identity."""
 
@@ -984,6 +1176,8 @@ def write_handoff(
             needs_user_decision, "needs_user_decision"
         )
         normalized_blockers = _normalize_text_list(blockers, "blockers")
+        normalized_evidence = _normalize_verification_evidence(verification_evidence)
+        report_sha: str | None = None
 
         candidate_sha = payload.get("candidate_sha256")
         candidate_text: str | None = None
@@ -1042,9 +1236,57 @@ def write_handoff(
                     "Published Spec must match the exact user-confirmed candidate digest"
                 )
 
+        if payload["role"] == "implementation_coordinator":
+            if status == "complete":
+                workspace = Path(payload["input_refs"]["workspace_path"])
+                workspace_head = _require_full_sha(
+                    _git(workspace, "rev-parse", "HEAD", field="workspace_path HEAD"),
+                    "workspace_path HEAD",
+                )
+                normalized_evidence = _normalize_verification_evidence(
+                    normalized_evidence, expected_code_sha=workspace_head
+                )
+                if not normalized_evidence:
+                    raise ContractError(
+                        "Completed implementation handoff requires verification_evidence"
+                    )
+                config = _load_config(config_path)
+                repository = Path(payload["input_refs"]["repository_path"])
+                expected_artifact = (
+                    f"{_repository_name(config, repository)}@{workspace_head}"
+                )
+                if normalized_artifact != expected_artifact:
+                    raise ContractError(
+                        "Completed implementation artifact_ref must equal the workspace HEAD"
+                    )
+                if normalized_review != "Approved" or normalized_blockers:
+                    raise ContractError(
+                        "Completed implementation handoff requires Approved review and no blockers"
+                    )
+                report_data = _read_regular_file(
+                    Path(payload["report_path"]), "report_path"
+                )
+                _validate_implementation_report_result(
+                    report_data,
+                    artifact_ref=expected_artifact,
+                    review_status=normalized_review,
+                    verification_evidence=normalized_evidence,
+                )
+                report_sha = _sha256_bytes(report_data)
+            elif normalized_evidence:
+                raise ContractError(
+                    "verification_evidence is only accepted on implementation complete"
+                )
+        elif normalized_evidence:
+            raise ContractError(
+                "verification_evidence is only accepted for implementation"
+            )
+
         payload["status"] = status
         payload["revision"] = expected_revision + 1
         payload["candidate_sha256"] = candidate_sha
+        payload["report_sha256"] = report_sha
+        payload["verification_evidence"] = normalized_evidence
         payload["artifact_ref"] = normalized_artifact
         payload["review_status"] = normalized_review
         payload["summary"] = normalized_summary
@@ -1065,6 +1307,21 @@ def _parse_key_values(values: Iterable[str]) -> dict[str, str]:
             raise ContractError(f"Duplicate input ref: {key}")
         result[key] = value
     return _normalize_input_refs(result)
+
+
+def _parse_verification_evidence(values: Iterable[str]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for index, item in enumerate(values):
+        try:
+            payload = json.loads(item)
+        except json.JSONDecodeError as exc:
+            raise ContractError(
+                f"verification evidence {index} must be valid JSON"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ContractError(f"verification evidence {index} must be a JSON object")
+        result.append(payload)
+    return result
 
 
 def _identity_arguments(parser: argparse.ArgumentParser) -> None:
@@ -1099,6 +1356,9 @@ def build_parser() -> argparse.ArgumentParser:
     write_parser.add_argument("--decision", action="append", default=[])
     write_parser.add_argument("--blocker", action="append", default=[])
     write_parser.add_argument("--confirmed-candidate-sha256")
+    write_parser.add_argument(
+        "--verification-evidence-json", action="append", default=[]
+    )
     return parser
 
 
@@ -1137,6 +1397,9 @@ def main(argv: list[str] | None = None) -> int:
                 needs_user_decision=args.decision,
                 blockers=args.blocker,
                 confirmed_candidate_sha256=args.confirmed_candidate_sha256,
+                verification_evidence=_parse_verification_evidence(
+                    args.verification_evidence_json
+                ),
             )
     except ContractError as exc:
         parser.error(str(exc))

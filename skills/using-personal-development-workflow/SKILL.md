@@ -5,9 +5,9 @@ description: Use when the user explicitly opens, resumes, continues, closes, or 
 
 # 使用个人开发工作流
 
-## 职责
+## 核心原则
 
-这是个人开发工作流的薄总控：验证当前对话是否激活，发现项目配置与持久游标，读取 `flow`、`review_mode` 和 `current_stage`，然后只加载当前路径所需的阶段 Skill、reference 和正式材料。三个 flow 只是同一个状态机的不同门禁组合，不新增阶段，也不建立三套工作流。
+这是个人开发工作流的薄总控：仓库源码是唯一规范版本；运行时只加载与当前阶段有关的最少合同，并复用绑定精确代码版本的有效证据。总控验证当前对话是否激活，发现项目配置与持久游标，读取 `flow`、`review_mode` 和 `current_stage`。三个 flow 只是同一个状态机的不同门禁组合，不新增阶段，也不建立三套工作流。
 
 平台只负责决定是否加载本 Skill。进入本 Skill 后，必须按本文顺序做渐进加载；看到链接不等于获准读取链接目标。
 
@@ -42,13 +42,13 @@ review_mode: manual | auto
 
 用户说“直接改”“别写长 Plan”等指令是 flow 与确认节奏的输入，不再作为绕过 CE、真实提交、验证和总账完成门的隐式通道。无法判断预期行为是否已被当前有效 Spec 或相关 CE 约定时，只问最小必要问题。
 
-`manual` 在关键节点等待用户确认；`auto` 在当前 CE 内允许连续推进、创建当前 CE 所需的 Worker，并在已登记 Worker 分支和本地 Spec Vault 中创建当前 CE 范围内的本地 commit。两者都不授权 Worker 合入 Delivery、Push、创建或合并 MR、部署、删除 Worktree；这些动作必须由用户手动确认。CE 完成后 `review_mode` 恢复为 `manual`。
+`manual` 在关键节点等待用户确认。`full + auto` 自动推进到验收确认门：它只在当前已绑定 CE 内连续推进，创建这一个 CE 所需的一个实现 Worker，并在该 Worker 分支和本地 Spec Vault 中创建当前 CE 范围内的本地 commit；不得扩展到另一个 CE、仓库或 Delivery。两种模式都不授权 Worker 合入 Delivery、Push、创建或合并 MR、部署、删除 Worktree；这些动作必须由用户手动确认。`auto` 在需求不清、范围扩大、基线漂移、4+ Task 例外或授权/身份不一致时停止，并始终在最终验收确认门停止。CE 完成后 `review_mode` 恢复为 `manual`。
 
 `code_review: skip | run` 与 `loop_mode: off | on` 只是当前 CE、当前会话的临时运行状态，不进入总账，CE 完成后关闭，新会话不得从聊天摘要恢复。它们不改变 `review_mode` 的 commit 权限。
 
 Loop 只有用户明确要求才开启，只允许 `direct` 与 `light`。当前为 `full` 时明确回复“复杂任务不能进入 Loop”并保持关闭。Loop 内只能在 `direct` 与 `light` 之间切换；发现 full 条件时停止并报告，不自动升级。Loop 使用轻量验证清单，依次执行测试、截图或机器证据比对、`systematic-debugging` 根因排查、最小充分修复和从头重试。
 
-用户要求 `code_review: run` 时，固定同一受测 SHA 和精确范围：`review_scope: CE | batch`、`review_base: <sha>`、`review_head: <sha>`、`review_commits: [<integrated_commit>...]`。并发启动总计三个 Agent：两个测试 Agent 处理可安全独立的验证组，一个只读 Agent 使用 `reviewing-code-quality`；不能安全并发的第二测试 Agent只审查覆盖和已有证据。三个 Agent 都不得修改代码、commit 或移动受测 SHA。
+用户要求 `code_review: run` 时，固定同一受测 SHA 和精确范围：`review_scope: CE | batch`、`review_base: <sha>`、`review_head: <sha>`、`review_commits: [<integrated_commit>...]`。Full CE 复用 SDD 最终整体 review，不追加等价代码 review；只有用户明确要求跨 CE 批次 review，才在冻结范围新增一次只读审查。测试证据按精确复用键消费，不由 review Agent 重跑。
 
 ## 配置、游标与事件发现
 
@@ -78,8 +78,8 @@ Loop 只有用户明确要求才开启，只允许 `direct` 与 `light`。当前
 | `requirement_discussion` | `exploring-and-grilling-requirements`；[requirement-discussion.md](references/requirement-discussion.md) | 只读用户输入和判定需求所必需的产品事实；不读正式材料正文、Worker/Plan/TDD/验收/集线/清理规则 |
 | `research` / `prototype` | [requirement-discussion.md](references/requirement-discussion.md)；本轮获授权的发现能力 | 只完成当前发现活动，结论返回需求讨论；Prototype 写入前另取授权 |
 | `register_change` | `managing-change-ledger`；[change-registration.md](references/change-registration.md) | 只读已确认最终总体方案与配置；登记并绑定后停止 |
-| `writing_spec` | `writing-specs`；[spec-stage.md](references/spec-stage.md)；Full 条件才读 [stage-worker-contract.md](references/stage-worker-contract.md) 与 [spec-worker-prompt.md](references/spec-worker-prompt.md) | 仅 `light/full`；Light 只读短 Spec 必需事实，Full 才读取精确代码 SHA、完整影响材料和测试稿子节点 |
-| `writing_plan` | [plan-stage.md](references/plan-stage.md)；[plan-baseline-selection.md](references/plan-baseline-selection.md)；[stage-worker-contract.md](references/stage-worker-contract.md)；[plan-worker-prompt.md](references/plan-worker-prompt.md)；[plan-review-contract.md](references/plan-review-contract.md)；确认 profile 后才加载 `writing-lean-plans` 或原生 `writing-plans` | 仅 `full`；`direct/light` 不进入本阶段，也不生成正式 `plan_ref` |
+| `writing_spec` | `writing-specs`；[spec-stage.md](references/spec-stage.md)；Full 条件才读 [stage-worker-contract.md](references/stage-worker-contract.md) 与 [spec-worker-prompt.md](references/spec-worker-prompt.md) | 仅 `light/full`；Light 使用短 Spec，Full 使用行为影响合同和测试稿子节点；两者都不调查代码实现 |
+| `writing_plan` | [plan-stage.md](references/plan-stage.md)；[plan-baseline-selection.md](references/plan-baseline-selection.md)；[stage-worker-contract.md](references/stage-worker-contract.md)；[plan-worker-prompt.md](references/plan-worker-prompt.md)；[plan-review-contract.md](references/plan-review-contract.md)；`writing-lean-plans` | 仅 `full`；所有正式 Plan 固定为 Lean，`direct/light` 不进入本阶段，也不生成正式 `plan_ref` |
 | `tdd_coding` | [implementation-stage.md](references/implementation-stage.md)；`test-driven-development`；`using-git-worktrees`；完成声明前加载 `verification-before-completion`；只有 Full 加载 [execution-contract.md](references/execution-contract.md)、[stage-worker-contract.md](references/stage-worker-contract.md)、[implementation-worker-prompt.md](references/implementation-worker-prompt.md)，明确接受 SDD 后才加载 `subagent-driven-development` | Direct/light 只加载本节、`test-driven-development`、`using-git-worktrees` 与 `verification-before-completion`；Full 才读取 Plan 基线、已接受 offer/合同和 SDD 输入；漂移或返工按 flow 处理 |
 | `writing_test` | `writing-test-drafts`；[acceptance-stage.md](references/acceptance-stage.md) | 仅兼容旧游标或修正测试操作/数据/环境；只读绑定测试稿与正式引用 |
 | `acceptance` | [acceptance-stage.md](references/acceptance-stage.md)；仅 Full 加载 `writing-test-drafts`，validator 全部通过后才加载 `writing-final-logic-drafts` | `direct/light` 使用轻量验证清单并写完成版修改与验证摘要；Full 使用绑定 `test_ref`、`code_ref` 和正式验收材料 |
@@ -91,7 +91,7 @@ Full 出现正式材料变化、范围扩大、基线漂移或验收返工事实
 
 ## 一轮一阶段
 
-`review_mode=manual` 时每轮最多执行当前路由行的一个阶段；当前阶段完成后**阶段切换后立即停止**，下一轮才读取新 `current_stage` 对应行。`review_mode=auto` 可以在同一 CE 内连续推进，但仍按新阶段重新加载精确路由行，并在需求不清、范围扩大、full 高风险、合入 Delivery、远端动作或删除动作前停止。
+`review_mode=manual` 时每轮最多执行当前路由行的一个阶段；当前阶段完成后**阶段切换后立即停止**，下一轮才读取新 `current_stage` 对应行。`review_mode=auto` 可以在同一 CE 内连续推进，但仍按新阶段重新加载精确路由行，并在需求不清、范围扩大、基线漂移、4+ Task 例外、合入 Delivery、远端动作、删除动作或最终验收确认门前停止。
 
 阶段 Worker、执行编排器和验收工具返回后都回到本入口完成本阶段收尾；它们不能自行推进另一阶段。Durable handoff 只恢复工作结果和位置，不恢复用户授权。
 
@@ -106,8 +106,11 @@ Full 出现正式材料变化、范围扩大、基线漂移或验收返工事实
 - 已完成事件不可修改；外部新反馈建立新事件。当前事件内部 TDD、自测或验收失败保留原 `change_id` 和失败证据。
 - 当前有效 Spec 或最新相关 CE 的行为约定优先；历史摘要不是当前行为合同，只作为调查线索。实现不得从旧讨论稿或旧历史摘要覆盖新行为。
 - Worker handoff、正式引用和代码引用必须通过其现有 helper/ledger 的身份、摘要、revision 与真实 Git 对象校验；不得以聊天摘要恢复。
+- 所有正式 Plan 始终采用 Lean，默认 1–3 个执行 Task；一个 Full CE 只有一个实现 Worker。不得把测试、文档或配置拆成独立 Task；它们归入产生该行为的垂直 Task，不单独制造 Worker。超过 3 个 Task 必须逐项说明不能合并的独立边界并取得用户例外确认。
+- 自动化成功证据以 `code_sha + command + environment_fingerprint + input_fingerprint` 为精确复用键；记录中至少包含精确 `code_sha`、命令、`environment_fingerprint`、`input_fingerprint`、范围、结果与 `produced_by` 阶段。同一证据只执行和记录一次。任一维度变化时相关证据失效，新 SHA 或新跨 CE 组合状态可以重新验证。
+- Task Implementer 负责 TDD 与聚焦测试，Reviewer 使用已有证据，Coordinator 汇总，Root 只验证引用、SHA、范围和证据，Delivery 在最终候选合并版本上执行一次 CE 完整自动化验证，Acceptance 复用绑定同一 `code_ref` 的自动化证据。
 - 编码、本地 commit、Worker 合入 Delivery、清理、push、创建或更新 MR、合并 MR、部署和删除远端分支是彼此独立的权限。只有当前 CE 的 `review_mode=auto` 自动授权范围内本地 commit；其他权限不能从 Plan、SQLite、旧会话或用户沉默推导。
-- Superpowers 原生技能是只读依赖；不得修改 `finishing-a-development-branch`、`writing-plans`、`subagent-driven-development` 等原生文件。
+- 外部技能是只读依赖；不得修改 `finishing-a-development-branch`、`writing-lean-plans`、`subagent-driven-development` 等外部文件。
 
 ## 状态卡
 
@@ -138,6 +141,7 @@ Full 出现正式材料变化、范围扩大、基线漂移或验收返工事实
 - Worker handoff 的 workflow/change/stage/role/input/revision/摘要不匹配；
 - 正准备用未提交修改或旧 HEAD 伪造 `code_ref`，或在受测代码与 `code_ref` 不一致时验收；
 - 正准备绕过有效 RED、当前 flow 的验证或完成总账不变量；以下 Plan、独立 review、验收 validator 和最终逻辑稿门禁只适用于 Full；
+- 正准备在同一证据复用键上重跑测试、为 Full CE 追加等价 review、为测试/文档/配置单建 Task，或采用未经用户例外确认的 4+ Task Plan；
 - 正准备从讨论稿决定实现，修改已完成事件，覆盖失败证据，或为内部失败创建新事件；
 - 正准备把当前授权扩大到另一个仓库、worktree、Plan、Task、需求、集线动作、清理动作或任一远端写入。
 

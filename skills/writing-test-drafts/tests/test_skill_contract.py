@@ -75,6 +75,18 @@ class WritingTestDraftContractTests(unittest.TestCase):
         self.assertIn("--test-ref <tests/CE-0001.md@full-vault-sha>", self.text)
         self.assertNotIn("tests/path.md", self.text)
 
+    def test_acceptance_can_reuse_exact_automation_evidence_without_rerunning(self):
+        for required in (
+            "`code_sha + command + environment_fingerprint + input_fingerprint`",
+            "完全相同的成功自动化证据不得重跑",
+            "复用不是 `not_executed`",
+            "只实际执行尚未覆盖的手工、外部环境或真实服务步骤",
+            "`produced_by`",
+            "任一维度变化",
+            "复用自动化证据：",
+        ):
+            self.assertIn(required, self.text)
+
 
 if __name__ == "__main__":
     unittest.main()

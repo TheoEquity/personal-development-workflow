@@ -1,6 +1,6 @@
 # Plan 机械校验与语义评审合同
 
-本文件是个人开发工作流 `writing_plan` 阶段的统一审查合同。Lean 与 Full Plan 使用各自 writer 和 reviewer 模板，但都必须遵守本文件规定的机械门禁、语义范围、复审收敛和时间预算。
+本文件是个人开发工作流 `writing_plan` 阶段的 Lean Plan 审查合同。writer 固定使用 `writing-lean-plans`，reviewer 固定使用 `lean-plan-document-reviewer-prompt.md`，并遵守本文件规定的机械门禁、语义范围、复审收敛和时间预算。
 
 ## 固定顺序
 
@@ -10,7 +10,7 @@
   → 一名语义 reviewer
   → Plan Worker approved handoff
   → 主 Agent 审核
-  → 用户确认精确候选
+  → manual 用户确认 / auto 总控采用精确候选
   → adopt-plan 正式采用
 ```
 
@@ -32,24 +32,28 @@ python <managing-change-ledger>/scripts/change_ledger.py --config <config-path> 
 
 dry-run 使用正式 `adopt-plan` 的同一验证路径，至少机械检查：
 
-- Plan 标题、头字段、章节顺序与 `Task N` grammar；
-- 每个 Task 的精确 Files、`Consumes`、`Produces` 和 checkbox Step；
+- Lean profile 标记、Plan 标题、头字段、章节顺序与 `Task N` grammar；
+- 每个 Task 的精确 Outcome、Files、`Consumes`、`Produces`、Implementation notes、Test goal 和 checkbox Step；
 - 禁止占位符和空洞字段；
 - Spec impact 表、Plan 实现兼容性表、覆盖关系、技术状态和真实 Task 映射；
-- canonical 引用角色、完整 Git SHA、Spec 代码基线、Plan 目标路径与适用 AGENTS；
+- canonical 引用角色、Plan 自有的代码仓库与完整 Git 基线、Plan 目标路径与适用 AGENTS；
 - 当前项目配置、活动游标、事件身份和 `writing_plan` 阶段。
+- 默认 1–3 个垂直 Task；4+ Task 候选的逐项独立交付、依赖或风险理由。
+- 每个 Task 至少包含一个非测试、文档或配置的生产代码 Create/Modify 目标；支持性工作必须归入产生对应行为的垂直 Task。
 
 只有标准输出返回 `status=validated` 才能派发语义 reviewer。dry-run 不修改 SQLite、`plan_ref`、`change_ref` 或 `current_stage`；失败时 Plan Worker 修正候选、形成新 `plan_ref` 并重新运行，不能让 reviewer 代替机械校验。
 
 ## 一名语义 reviewer
 
-每个候选审查循环只派发一名独立 reviewer。首次派发使用 `fork_turns=none`；Plan Worker 在 `report.md` 记录 reviewer 的稳定任务身份，修正后的复审必须核对并继续使用该 reviewer，不为每轮修正另派 reviewer。reviewer 收到精确候选、lint 成功结果、正式 Spec 与测试稿、选定代码树、基线字段、影响要求、适用 AGENTS、工作区差异，以及对应 Lean/Full reviewer 模板。
+每个候选审查循环只派发一名独立 reviewer。首次派发使用 `fork_turns=none` 并继承当前有效配置；Plan Worker 在 `report.md` 记录 reviewer 的稳定任务身份，修正后的复审必须核对并继续使用该 reviewer，不为每轮修正另派 reviewer。reviewer 收到精确候选、lint 成功结果、正式 Spec 与测试稿、选定代码树、基线字段、影响要求、适用 AGENTS、工作区差异，以及 Lean reviewer 模板。
 
 语义 reviewer 只检查以下阻断项：
 
 1. **错误方案**：架构、所有权、数据或控制流、状态和失败策略与 Spec 或精确代码事实冲突。
 2. **缺失行为**：已确认的用户可观察行为、边界、失败行为或关联不变量没有被 Plan 覆盖。
 3. **不可实现接口**：Plan 依赖的接口、签名、数据形状、调用顺序或依赖关系在选定代码树中不存在、互相矛盾或无法按 Plan 建立。
+
+“错误方案”同时包括不真实的 Task 边界：把可共同交付的工作拆成多个微 Task、把测试/文档/配置单独包装成 Task，或 4+ Task 的理由与实际交付、依赖、风险边界不相符。reviewer 必须核对 Task 粒度与例外理由，不能因 lint 已通过而跳过这项语义判断。
 
 标题、checkbox、占位符、impact 表字段、引用、SHA、`--config` 等机械问题不再交给 reviewer；措辞、风格、展开密度和可选改进也不进入语义结论。reviewer 不能用建议逐步扩大阻断范围。
 

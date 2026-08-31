@@ -15,7 +15,7 @@
 
 `light` 的实施若有多个有先后关系的步骤，只在 `.local` 维护简短任务清单，不生成正式 `plan_ref`。开发中范围扩大时重新判断；同一独立交付可以升级 flow，形成另一项独立交付时才拆新 CE。
 
-每个新需求或外部反馈都使用 `exploring-and-grilling-requirements`。输入看起来完整、已有实现、用户要求跳过或时间紧，都不能让总控替代该 Skill 作出清晰度判定；个人工作流中不改用普通 `brainstorming`。
+每个新需求或外部反馈都使用 `exploring-and-grilling-requirements`。输入看起来完整、已有实现、用户要求跳过或时间紧，都不能让总控替代该 Skill 作出清晰度判定。普通 `brainstorming` 保留但强制禁用，不得调用或执行。
 
 对于 `direct` 和边界已经明确的 `light`，只做足以判断上述路由的最小讨论，不强制展开完整 decision-tree Grill。只有存在会改变结果、范围或风险级别的实质未决项时才使用完整 Grill；`full` 仍使用完整需求讨论。
 
@@ -28,7 +28,7 @@
 - 总体行为、输出与状态变化；
 - 边界和行为校验和。
 
-打印后输出“阶段状态：等待确认”，确认前保持 `current_stage=requirement_discussion` 并停止。状态卡摘要不能代替已确认的最终总体方案。只有用户在当前对话明确确认刚展示的完整方案，且讨论 Skill 输出“阶段状态：已完成”后，确认后才把 `current_stage` 更新为 `register_change`；更新后立即停止，不在同一轮登记事件。
+打印后输出“需求讨论状态：等待确认”，确认前保持 `current_stage=requirement_discussion` 并停止。状态卡摘要不能代替已确认的最终总体方案。只有用户在当前对话明确确认刚展示的完整方案，且讨论 Skill 输出“需求讨论状态：已完成”并把控制权交回后，总控才按个人工作流门控把 `current_stage` 更新为 `register_change`；更新后立即停止，不在同一轮登记事件。
 
 ## Research 与 Prototype
 

@@ -6,8 +6,10 @@ or any implementation/review role. Callers reference this file; they do not
 redefine either object.
 
 `authorization_offer` is the immutable object displayed before the
-personal-workflow SDD question. It describes exactly what a positive answer
-would authorize; displaying it does not itself grant that authority.
+personal-workflow SDD question in `review_mode=manual`, or instantiated and
+validated without that question in `review_mode=auto`. It describes the exact
+scope of local implementation authority; it never grants Delivery, remote, or
+cleanup authority.
 
 ```yaml
 authorization_offer:
@@ -123,7 +125,7 @@ or offer that SHA as a baseline without new explicit user direction.
 
 ## Personal-workflow SDD handoff
 
-个人工作流中的固定问题 `是否开启 Subagent-Driven Development 进行开发？`
+个人工作流 `review_mode=manual` 中的固定问题 `是否开启 Subagent-Driven Development 进行开发？`
 是授权提示，不是进度通知。提问前只实例化并展示 `authorization_offer`；此时不得用
 空范围或猜测的 worktree 提前实例化 `execution_contract`。offer 必须把当前 `plan_ref`、
 配置中的代码仓库绝对路径、当前 Plan 范围、Plan 显示的 `base_source`、结构化
@@ -147,6 +149,8 @@ Plan；不得改成等价 Task 列表、重复项或未来 Task。只要当前 S
 重新评估并展示新的完整 offer 后再提问，不能就地改写。用户在当前对话中的明确肯定答复
 只接受刚刚显示的完整序列化 offer；沉默、含糊回答或批准 Plan 都不接受它。展示 offer
 和问题后必须停止，不得在同一轮验证来源、fetch、创建 worktree、编码或 commit。
+
+`review_mode=auto` 不再询问 SDD。总控仍为当前已绑定 CE、当前精确 `plan_ref` 和当前代码仓库实例化同一完整 offer，并逐字段验证后才派生合同；持久 `review_mode=auto` 只授权这个范围内的隔离 worktree、SDD 和本地 commits。它不得扩展到另一个 CE、仓库或 Delivery，也不授权 Push、MR、部署或删除 Worktree。需求不清、范围扩大、基线漂移、引用/offer/contract 不一致或 Task 数量例外未获得用户确认时停止，不能用 auto 猜测决定。
 
 不可变性按字段名与归一化值比较，不按 Markdown/YAML 字节比较。展示前把 SHA 规范为 40 位
 小写十六进制、布尔值与 null 解析为原生类型、仓库路径解析为平台确认的绝对路径，并保持
@@ -198,5 +202,8 @@ either object is absent, altered, internally inconsistent, or too narrow for
 discovered work. Reviewers independently fail the scope gate when a change or
 commit falls outside the contract.
 
-Durable progress may restore task position and evidence only. It never
-restores authorization in a new conversation.
+Durable progress may restore task position and evidence. A new conversation
+never restores a manual authorization; a persisted `review_mode=auto` may
+resume only after revalidating the current candidate, formal references, and
+exact bounded offer, and it still restores no authority for another CE or any
+external action.

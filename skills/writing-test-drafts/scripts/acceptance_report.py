@@ -12,6 +12,7 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Sequence
 
@@ -28,10 +29,29 @@ CANONICAL_STATUSES = ("passed", "failed", "not_executed")
 CANONICAL_OVERALL = ("passed", "failed", "incomplete")
 HUMAN_OVERALL = {"passed": "通过", "failed": "失败", "incomplete": "未完成"}
 FAILURE_HEADER = ("test_id", "失败测试项", "预期结果", "实际结果", "错误摘要", "证据与日志")
+REUSED_EVIDENCE_PREFIX = "复用自动化证据："
+REUSED_EVIDENCE_FIELDS = {
+    "code_sha",
+    "command",
+    "environment_fingerprint",
+    "input_fingerprint",
+    "scope",
+    "result",
+    "produced_by",
+}
 
 
 class AcceptanceReportError(ValueError):
     """Raised when a test draft or acceptance report violates the grammar."""
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise AcceptanceReportError(f"JSON object contains duplicate key: {key}")
+        result[key] = value
+    return result
 
 
 def strip_fenced_blocks(text: str) -> str:
@@ -374,6 +394,70 @@ def _validate_expected_bindings(change_id: str, test_ref: str, code_ref: str) ->
         )
 
 
+def _validate_reused_automation_evidence(
+    items: Sequence[dict[str, object]], expected_code_ref: str
+) -> list[dict[str, str]]:
+    expected_code_sha = expected_code_ref.rsplit("@", 1)[1].lower()
+    normalized: list[dict[str, str]] = []
+    seen_keys: set[tuple[str, str, str, str]] = set()
+
+    for item in items:
+        for evidence_line in _summary_lines(item["evidence"]):  # type: ignore[arg-type]
+            if not evidence_line.startswith(REUSED_EVIDENCE_PREFIX):
+                continue
+            if item["status"] != "passed":
+                raise AcceptanceReportError(
+                    "reused automation evidence is valid only for a passed acceptance item"
+                )
+            serialized = evidence_line[len(REUSED_EVIDENCE_PREFIX) :].strip()
+            try:
+                evidence = json.loads(serialized, object_pairs_hook=_unique_json_object)
+            except json.JSONDecodeError as error:
+                raise AcceptanceReportError(
+                    "reused automation evidence must contain one compact JSON object"
+                ) from error
+            if not isinstance(evidence, Mapping) or set(evidence) != REUSED_EVIDENCE_FIELDS:
+                raise AcceptanceReportError(
+                    "reused automation evidence fields must exactly match the canonical schema"
+                )
+
+            values: dict[str, str] = {}
+            for field in REUSED_EVIDENCE_FIELDS:
+                value = evidence[field]
+                if not isinstance(value, str) or not value.strip() or PLACEHOLDER_PATTERN.search(value):
+                    raise AcceptanceReportError(
+                        f"reused automation evidence {field} must be a concrete string"
+                    )
+                values[field] = value.strip()
+            values["code_sha"] = values["code_sha"].lower()
+            if re.fullmatch(FULL_SHA_PATTERN, values["code_sha"]) is None:
+                raise AcceptanceReportError(
+                    "reused automation evidence code_sha must be a full Git object ID"
+                )
+            if values["code_sha"] != expected_code_sha:
+                raise AcceptanceReportError(
+                    "reused automation evidence code_sha does not match acceptance code_ref"
+                )
+            if values["result"] != "passed" or values["produced_by"] != "delivery":
+                raise AcceptanceReportError(
+                    "reused automation evidence must be a passed result produced by delivery"
+                )
+
+            evidence_key = (
+                values["code_sha"],
+                values["command"],
+                values["environment_fingerprint"],
+                values["input_fingerprint"],
+            )
+            if evidence_key in seen_keys:
+                raise AcceptanceReportError(
+                    "reused automation evidence contains a duplicate exact evidence key"
+                )
+            seen_keys.add(evidence_key)
+            normalized.append(values)
+    return normalized
+
+
 def validate_acceptance_report(
     test_text: str,
     report_text: str,
@@ -443,6 +527,9 @@ def validate_acceptance_report(
         )
 
     failed_items = [item for item in actual_items if item["status"] == "failed"]
+    reused_automation_evidence = _validate_reused_automation_evidence(
+        actual_items, expected_code_ref
+    )
     handoff_valid, handoff_rows = _validate_failure_handoff(
         visible_body, failed_items, derived
     )
@@ -467,6 +554,7 @@ def validate_acceptance_report(
         "failure_handoff_required": derived == "failed",
         "failure_handoff_valid": handoff_valid,
         "failure_handoff": handoff_rows,
+        "reused_automation_evidence": reused_automation_evidence,
         "items": actual_items,
     }
 

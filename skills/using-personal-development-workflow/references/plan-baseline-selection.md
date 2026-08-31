@@ -5,7 +5,7 @@
 ## 交付轮次与启动时机
 
 - 需求讨论阶段不读取本文件。新需求完成登记并进入首次 `writing_plan` 时，才把“新需求启动的稳定基线候选”展示给用户；这样不会在需求讨论提前加载 Plan、worktree 或收尾规则。
-- 一轮可以只有一个需求，也可以有多个并发需求。每个需求仍有独立 `change_id`、分支、worktree、正式材料和 `code_ref`，但同一轮默认共享已经冻结的 `base_source`、`base_locator` 和 `base_sha`。
+- 一轮可以只有一个需求，也可以有多个并发需求。每个需求仍有独立 `change_id`、分支、worktree、正式材料和 `code_ref`，但同一轮默认共享已经冻结的 `base_repository`、`base_source`、`base_locator` 和 `base_sha`。
 - 当前轮已经有共同基线时，优先推荐该 SHA。用户手动选择不同于当前共同基线的稳定候选时，该需求进入新一轮；不得在原轮次混合基线，也不得静默改变其他需求的 Plan。
 - 轮次身份不新增 SQLite stage、表、字段或正式材料类型。总控从当前会话的轮次选择、实际 Git、已完成事件总账和集线绿色 HEAD 恢复；无法唯一恢复时重新展示候选并等待选择。
 
@@ -77,7 +77,7 @@ Plan 基线候选
 
 1. 协调入口只建立一张共同基线候选卡并等待一次选择。卡片只展示本轮共同基线、集线绿色 HEAD、已完成事件 `code_ref` 和实际远端目标分支 HEAD；第一轮没有共同基线或集线时通常推荐远端目标分支。
 2. 用户在该卡片后只回复“继续”时接受推荐；明确选择另一个已展示稳定候选时使用该项。本地共同基线可以尚未推送，不要求与远程候选相等。
-3. 选择结果原样传给本轮所有对应 Plan。每份 Plan 记录相同的 `base_source`、`base_locator` 和 40 位完整 `base_sha`；远程来源的 `base_remote`、`base_branch` 也相同，本地来源的 `base_worktree`、`base_local_branch`、`base_detached_sha`、pushed 状态和 dirty 排除说明也相同。`base_locator` 只作共同基线的可读来源标签，不是各需求后续独立开发 worktree 的路径，也不得代替结构化本地字段参与机械验证。
+3. 选择结果原样传给本轮所有对应 Plan。每份 Plan 记录相同的 `base_repository`、`base_source`、`base_locator` 和 40 位完整 `base_sha`；远程来源的 `base_remote`、`base_branch` 也相同，本地来源的 `base_worktree`、`base_local_branch`、`base_detached_sha`、pushed 状态和 dirty 排除说明也相同。`base_locator` 只作共同基线的可读来源标签，不是各需求后续独立开发 worktree 的路径，也不得代替结构化本地字段参与机械验证。
 4. 每个需求仍创建自己的隔离 worktree，但都使用选定的同一个 `base_sha` 作为强制起点。本地来源不执行远程 fetch 或远程相等性比较；远程来源继续执行对应的远程门禁。
 5. 选中候选在所有 Plan 完成选择验证前移动时，整轮选择失效，重新生成一张共同基线候选卡；不得只替换某一个需求的基线。未选候选移动不改变已经选定的共同基线。
 6. 新加入需求接受当前共同基线时进入本轮；选择不同候选时进入新一轮。任何情况下都禁止让一个 Plan 在原轮次使用不同 `base_sha`。
@@ -101,11 +101,13 @@ Plan 基线候选
 每份正式 Plan 的 `## 开发基线` 至少逐行记录：
 
 ```text
+base_repository: <项目配置中的仓库稳定名称>
 base_source: remote | local
 base_locator: <可读来源标签，不作机械解析>
 base_sha: <40 位完整 Git commit SHA>
 ```
 
+- `base_repository` 必须精确匹配项目配置中的一个仓库名称，并与 Plan 调查的代码树一致。
 - `base_source=remote` 时，额外记录可机械解析的 `base_remote` 与 `base_branch`。
 - `base_source=local` 时，额外逐行记录 `base_worktree`（选择时的绝对来源 worktree）、`base_local_branch`（branch 名；detached 时为 `null`）和 `base_detached_sha`（detached 时为选择的完整 SHA；有 branch 时为 `null`），并记录 pushed 状态和 dirty 修改排除说明。`base_locator` 仅供人读，机械验证只使用这些结构化字段，不从 `absolute-worktree@branch` 之类字符串猜测分隔位置。
 - Plan reviewer 必须收到这些字段、配置仓库绝对路径和精确 `base_sha` 的代码树；输入不一致时不能批准或采用 Plan。

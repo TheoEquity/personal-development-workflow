@@ -10,7 +10,7 @@
 
 ## Worker 与 Delivery
 
-开发使用滚动 Delivery：一个 Delivery Worktree 负责接收串行集成、组合验证和准备 MR；一个 Worker Worktree 同时只绑定一个 `change_id` 和一个 `task_id`，只在自己的分支开发。新 Worker 从 Delivery 最新状态创建；旧 Worker 合入前先同步 Delivery 最新结果并重验。开发可以并发，集成必须串行。
+开发使用滚动 Delivery：一个 Delivery Worktree 负责接收串行集成、最终候选验证和准备 MR。一个 Full CE 只使用一个实现 Worker Worktree，绑定当前 `change_id + plan_ref` 并在其中执行整份 Plan；1–3 个 SDD Task 是这个 Worker 内的实现/review 边界，不创建额外外层 Worker、worktree 或集成候选。Direct/light 也默认使用一个当前 CE 范围的 Worker。不同 CE 可以并发开发，集成必须串行。
 
 在已开启的个人工作流内，Worktree 是 Delivery/Worker 身份和后续 `code_ref` 的组成部分。用户拒绝创建或使用 Worktree 时保持 `tdd_coding` 并停止，不得在原 checkout 降级开发；如需脱离这套约束，用户必须明确关闭个人工作流后另行决定，现有 CE 和游标不会因此被自动完成或清理。
 
@@ -22,7 +22,7 @@
 .local/deliveries/<delivery_id>/changes/<change_id>/tasks.md
 ```
 
-修改前必须用真实 Git 状态复核目录、分支、绑定 CE/任务、基线 SHA 和 dirty 状态。Worker 身份不匹配、已经集成或记录与 Git 不一致时停止，不复用它做新任务。每个 Worker 合入后记录实际 `integrated_commit`；Worker 不直接修改 `change.md`。
+修改前必须用真实 Git 状态复核目录、分支、绑定 CE/Plan、基线 SHA 和 dirty 状态。Worker 身份不匹配、已经集成或记录与 Git 不一致时停止，不复用它做新 CE 或新 Plan。Worker 合入后记录实际 `integrated_commit`；Worker 不直接修改 `change.md`。
 
 `review_mode=manual` 时本地 commit 仍需当前节点确认；`review_mode=auto` 允许在当前 CE 已登记 Worker 分支和本地 Spec Vault 中创建范围内本地 commit。两种模式都不授权 Worker 合入 Delivery、Push、MR、合并、部署或删除 Worktree。
 
@@ -36,20 +36,25 @@
 review_scope: CE | batch
 review_base: <sha>
 review_head: <sha>
+reviewed_worker_head: <sha | null>
 review_commits: [<integrated_commit>...]
 ```
 
-CE 范围时，`review_head` 必须逐字等于当前 CE 的 `code_ref` SHA；`review_commits` 只取当前 CE 的集成记录，按 Delivery 祖先顺序排列、不得重复，且每一项都必须是 `review_head` 的祖先；`review_base` 取该 CE 最早一个入选集成记录的 `delivery_before_sha`。base/head 只给出运行上下文，代码归属以经过上述校验的 `review_commits` 为准。Batch 范围时必须使用用户冻结批次的 `review_base=freeze_base`、`review_head=freeze_head`，并列出该批次内全部、且仅限该批次的 `integrated_commit`。
+CE 范围时，`review_base` 取该 CE 的 `delivery_before_sha`。Full 的 `reviewed_worker_head` 绑定最终审查对象，`review_head` 记录受审的 Worker SHA；`code_ref` 另行记录 Delivery merge SHA。Delivery 用 Git 证明 Worker SHA 是 merge SHA 的祖先，且 `--no-ff` 集成没有改写该 CE 的已审 diff；`review_commits` 只取当前 CE 的集成记录，按 Delivery 祖先顺序排列、不得重复。该证明把 SDD 最终整体 review 绑定到最终候选，而不要求 Worker SHA 与 merge SHA 相等。Full 的 SDD 最终整体 review 同时满足 Full CE 级代码 review，Coordinator、Root 和 Delivery 不得追加等价代码 review；`code_review=run` 只核对并复用该精确范围的最终 review。Direct/light 明确要求 CE review 时只增加一次范围化只读 review，不派测试 Agent 重跑已有证据。
 
-并发运行总计三个 Agent：两个测试 Agent 分别执行可安全独立的验证组，一个 Agent 使用 `reviewing-code-quality` 做只读审核。无法安全拆分时，第二测试 Agent 只核对覆盖和已有证据。三者都不得修改、commit 或移动受测 SHA；汇总后再决定返工。`code_review=run` 的三 Agent 结果未汇总通过前不得进入 `acceptance`；失败仍停留在 `tdd_coding` 并按当前 CE 最小返工。`code_review`、`loop_mode` 在 CE 完成后关闭，新会话不恢复。
+只有用户明确要求跨 CE 批次 review，才在 `review_base=freeze_base`、`review_head=freeze_head` 和该批次全部、且仅限该批次的 `integrated_commit` 上增加一次批次级只读审查。它只审查跨 CE 交互，不重做各 CE 已完成的内部代码 review；它消费已有自动化证据，相同证据键不得重跑测试。审查不得修改、commit 或移动受测 SHA。`code_review`、`loop_mode` 在 CE 完成后关闭，新会话不恢复。
 
 ## Full 的 SDD 专用门禁
+
+Full 实现不固定角色模型或推理档位。Implementation Coordinator 按任务复杂度选择足够完成任务的最低合理档位；没有代表性结果证明收益时，不因 reviewer、返工或 Full 身份自动升级。
 
 Plan 刚采用或新对话恢复时，先从当前 `plan_ref`、配置仓库和 Plan 基线实例化并完整显示不可变 `authorization_offer`，然后逐字询问：**“是否开启 Subagent-Driven Development 进行开发？”** 阶段状态为“等待 SDD 选择”。offer 缺字段时不能提问。只回复“继续”不算明确开启 SDD。
 
 只接受用户对该门禁明确表达“开启 / 使用 SDD”的肯定答复或明确“不启动”。“继续”“开始开发”、沉默、含糊回答、Plan 批准或旧对话都不是 SDD/commit 授权。展示 offer 后立即停止；同一轮不得 fetch、创建开发 worktree、修改代码或 commit。
 
 用户明确回复“开启”后才进入 SDD 门禁并执行。用户明确回复“不启动”时，保持 `tdd_coding`，不创建 worktree、不修改代码、不创建本地 commit，并停止。用户之后另行明确选择非 SDD 执行方式时，才可使用带独立逐任务 reviewer 的 `executing-plans`；不启动本身不自动降级。
+
+以上提问只适用于 `review_mode=manual`。`review_mode=auto` 在当前已绑定 CE、当前精确 `plan_ref` 和一个实现 Worker 范围内不再询问 SDD，可实例化同样不可变的 offer 并授权创建/进入隔离 worktree、执行 SDD 与创建该 CE 范围内本地 commits；它不得扩展到另一个 CE、仓库或 Delivery，也不授权合入 Delivery、Push、MR、部署或删除 Worktree。需求不清、范围扩大、基线漂移、offer/contract 不一致或 4+ Task 缺用户例外确认时立即停止。
 
 ## 开发前远程基线门禁
 
@@ -71,29 +76,33 @@ Plan 刚采用或新对话恢复时，先从当前 `plan_ref`、配置仓库和 
 
 来源门禁通过且实际 worktree 验证后，才从已接受 offer 机械派生最终 `execution_contract`；只补入 `using-git-worktrees` 实际返回的 `workspace_or_branch`，其余字段逐字复制。出现第二仓库、更宽 Plan/Task、不同 TDD/commit/finishing 边界时停止。
 
-总控重新核对 `change_ref`、`spec_ref`、`plan_ref`、`test_ref` 和基线，初始化或验证 `implementation/implementation_coordinator` handoff。helper 将规范化 offer/contract 原样固化为当前 run 的 `authorization-offer.json`、`execution-contract.json` 和 SHA-256。使用 [implementation-worker-prompt.md](implementation-worker-prompt.md) 派发全新 Coordinator；它只读取 helper 文件，逐字节、摘要和逐字段验证后启动 `subagent-driven-development`。
+总控重新核对 `change_ref`、`spec_ref`、`plan_ref`、`test_ref` 和基线，初始化或验证唯一 `implementation/implementation_coordinator` handoff。helper 将规范化 offer/contract 原样固化为当前 run 的 `authorization-offer.json`、`execution-contract.json` 和 SHA-256。使用 [implementation-worker-prompt.md](implementation-worker-prompt.md) 派发这一个实现 Worker/Coordinator；它只读取 helper 文件，逐字节、摘要和逐字段验证后启动 `subagent-driven-development`。
 
-Coordinator 是 SDD controller，不是 Task Implementer。它按正式 Plan 派发逐任务 Implementer、独立 Task Reviewer、必要 Fixer 和 Final Reviewer；Task 角色不得自行派发 reviewer 或辅助 Subagent。已接受 offer 与同一序列化内容原样传给所有角色，不能在 Task 间改写。全部任务结束后写完整报告，短返回有效 handoff 并返回本入口；不得调用 `finishing-a-development-branch` 或执行任何集成动作。
+Coordinator 是 SDD controller，不是 Task Implementer。它在同一 Worker worktree 内按正式 Plan 的默认 1–3 个 Task 串行派发逐任务 Implementer、独立 Task Reviewer、必要 Fixer 和 Final Reviewer；这些内部角色不是新的外层 Worker。Task 角色不得自行派发 reviewer 或辅助 Subagent。已接受 offer 与同一序列化内容原样传给所有角色，不能在 Task 间改写。全部任务结束后写完整报告，短返回有效 handoff 并返回本入口；不得调用 `finishing-a-development-branch` 或执行任何集成动作。
 
 ## TDD、验证与 code_ref
 
-使用 `test-driven-development`；它是有效 RED 顺序、可复现实现前基线和结构化证据的唯一规范源。任务不满足有效 RED/豁免与证据定义时，不得进入 reviewer、报告 DONE 或开始下一 Task。
+使用 `test-driven-development`；它是有效 RED 顺序、可复现实现前基线和结构化证据的唯一规范源。Task Implementer 负责 TDD 和 Task 聚焦测试；Reviewer 使用已有测试证据审查，不默认重跑。任务不满足有效 RED/豁免与证据定义时，不得进入 reviewer、报告 DONE 或开始下一 Task。
 
-完成声明前加载 `verification-before-completion` 并取得当前代码版本的新鲜证据。更新 `code_ref` 前，本次相关测试和生产代码必须包含在一个获得明确授权的本地 commit 中；不得用仍指向旧内容的 `HEAD` 表示未提交修改。
+自动化证据的复用键固定为 `code_sha + command + environment_fingerprint + input_fingerprint`。四项完全相同的成功证据只执行和记录一次；Coordinator 汇总 Task 结果与 SDD 最终整体 review，不重跑完整测试；Root 只验证引用、SHA、范围和证据，不重跑测试或追加 review。`environment_fingerprint` 是影响结果的工具链、运行时和配置的稳定摘要，`input_fingerprint` 是参数、fixture、数据集和跨 CE 组合输入的稳定摘要；时间戳、run id 和临时路径只有在会改变行为时才纳入。审计用 `scope` 另行记录，但会改变执行内容的范围必须进入 `input_fingerprint`。任一复用键维度变化，相关证据失效并重新执行；新代码 SHA 或新的跨 CE 组合状态不是重复证据。失败证据始终保留且不可复用；原键重试只限已记录的瞬时失败，否则先修复导致变化的代码、环境或输入。
+
+可跨角色复用的成功证据只在相关实现已经提交后绑定 Worker `HEAD`；TDD 的提交前 RED 和中间 GREEN 仍保留在 Task 记录中，但不伪装成可跨阶段复用的已提交版本证据。Implementation Coordinator 完成 handoff 时必须通过 helper 写入结构化 `verification_evidence`，每项包含 `code_sha`、`command`、`environment_fingerprint`、`input_fingerprint`、`scope`、`result=passed` 与 `produced_by=task_implementer`；helper 要求 `code_sha` 等于 Worker `HEAD`、复用键不重复，并锁定 `report.md` 摘要。
+
+更新 `code_ref` 前，本次相关测试和生产代码必须包含在一个获得明确授权的本地 commit 中；不得用仍指向旧内容的 `HEAD` 表示未提交修改。Delivery 在最终候选合并版本上执行一次 CE 完整自动化验证，作为该候选 SHA 的完整证据所有者。
 
 合同不授权 commit 时，保留范围内未提交测试和代码，保持 `tdd_coding`、原 `code_ref` 和事件 `in_progress`，状态写“待授权提交”，不得误报 blocker。用户随后明确授权时，按 flow 核对当前 CE 的既有行为或短 Spec 与 diff；Full 另核对精确 Plan。之后运行新鲜验证，只提交授权文件。
 
-形成 Worker 提交后，只读确认本次相关文件没有遗漏在 commit 之外，把 Worker 标记为待集成候选。Worker 不直接写 `code_ref`。用户明确授权本地合入后，Delivery 按顺序逐个集成；冲突或验证失败立即停止，未处理候选保持原状。
+形成唯一 Worker 提交后，只读确认本次相关文件没有遗漏在 commit 之外，把 Worker 标记为待集成候选。Worker 不直接写 `code_ref`。用户明确授权本地合入后，Delivery 形成一个最终候选 merge；冲突或验证失败立即停止，候选保持原状。
 
-一个 CE 的全部 Worker 都已集成并在 Delivery 当前提交上验证通过后，才从实际 Delivery Worktree 调用：
+该 CE 的唯一 Worker 已集成，且最终候选 SHA 的一次 CE 完整自动化验证通过后，才从实际 Delivery Worktree 调用：
 
 ```text
 set-code-ref <change_id> --worktree <absolute-delivery-worktree-root>
 ```
 
-`managing-change-ledger` 用 Git common directory匹配配置仓库，从 Delivery 读取完整 `HEAD` 并原子写入单一 `code_ref`；每个 Worker 的 `integrated_commit` 仍留在本地状态，用于 CE 归属和审核范围，不把 `code_ref` 改成数组。提交事务前 HEAD 变化则回滚。
+`managing-change-ledger` 用 Git common directory匹配配置仓库，从 Delivery 读取完整 `HEAD` 并原子写入单一 `code_ref`；Worker 的 `integrated_commit` 仍留在本地状态，用于 CE 归属和审核范围，不把 `code_ref` 改成数组。提交事务前 HEAD 变化则回滚。
 
-引用成功后，direct/light 核对轻量验证清单，full 核对 `test_ref`。若 `code_review=run`，还必须先完成上面的三 Agent 固定范围审核；只有汇总通过后才把阶段从 `tdd_coding` 进入 `acceptance`。`manual` 立即停止；`auto` 可重新加载验收路由继续。
+引用成功后，direct/light 核对轻量验证清单，full 核对 `test_ref`、Delivery 完整自动化证据和 SDD 最终 review。若 `code_review=run`，按上文复用 CE review 或执行用户明确要求的跨 CE 批次 review；通过后才把阶段从 `tdd_coding` 进入 `acceptance`。`manual` 立即停止；`auto` 可重新加载验收路由继续，并在最终验收确认门停止。
 
 ## 返工与停止信号
 

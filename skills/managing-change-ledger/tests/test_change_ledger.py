@@ -66,23 +66,22 @@ class LedgerTests(unittest.TestCase):
             "## 既有功能与流程影响\n\n"
             "| impact_id | 既有功能或流程 | 当前行为 | 与新需求的交点 | 影响结论 | Spec 处理 |\n"
             "|---|---|---|---|---|---|\n"
-            "| I-001 | 批注唯一同步 | 同一批注只创建一个映射 | 新策略复用映射入口 | 保持不变 | 无需修改 |\n\n"
-            "## 可能的影响范围（非行为契约）\n\n"
-            f"- 代码基线：`code-repo@{self.code_sha}`\n\n"
-            "| 可能影响对象 | 当前路径 | 可能的影响类型 | 判断依据 |\n"
-            "|---|---|---|---|\n"
-            "| 同步入口 | `app.py` | 需要核对 | 与唯一同步规则相关 |\n",
+            "| I-001 | 批注唯一同步 | 同一批注只创建一个映射 | 新策略复用映射入口 | 保持不变 | 无需修改 |\n",
             encoding="utf-8",
         )
         (self.vault / "plans/CE-0001.md").write_text(
             "# Annotation Sync Implementation Plan\n\n"
+            "> **Plan profile:** lean\n"
             "> **For agentic workers:** Use the required execution skill.\n\n"
             "**Goal:** Implement unique annotation synchronization.\n\n"
             "**Architecture:** Keep identity validation at the synchronization boundary. "
             "Reuse the existing persistence seam.\n\n"
             "**Tech Stack:** Python, unittest\n\n"
+            "**Spec:** specs/CE-0001.md\n\n"
+            "**Acceptance:** tests/CE-0001.md\n\n"
             "## Global Constraints\n\n- Preserve stable annotation identity.\n\n"
             "## 开发基线\n\n"
+            "- `base_repository`: `code-repo`\n"
             "- `base_source`: `remote`\n"
             "- `base_locator`: `origin/main`\n"
             f"- `base_sha`: `{self.code_sha}`\n"
@@ -94,10 +93,17 @@ class LedgerTests(unittest.TestCase):
             "| I-001 | `app.py` synchronization boundary | New strategy shares the existing identity guard | 无影响 | Existing stable annotation ID remains the isolation key | 无需任务 |\n\n"
             "---\n\n"
             "### Task 1: Synchronization guard\n\n"
+            "**Outcome:** The synchronization boundary preserves one mapping per annotation.\n\n"
             "**Files:**\n- Modify: `app.py`\n- Test: `tests/test_app.py`\n\n"
             "**Interfaces:**\n- Consumes: annotation ID\n- Produces: unique mapping\n\n"
+            "**Implementation notes:**\n- Reuse the stable annotation identity at the persistence seam.\n\n"
+            "**Test goal:** A duplicate annotation attempt fails before the guard is implemented.\n\n"
             "- [ ] **Step 1: Write the failing test**\n\n"
-            "Run the focused unit test and confirm the duplicate mapping assertion fails.\n",
+            "Run the focused unit test and confirm the duplicate mapping assertion fails.\n\n"
+            "- [ ] **Step 2: Implement the synchronization guard**\n\n"
+            "Reuse the selected persistence seam.\n\n"
+            "- [ ] **Step 3: Verify the task**\n\n"
+            "Run the focused unit test and related regressions.\n",
             encoding="utf-8",
         )
         (self.vault / "tests/CE-0001.md").write_text(
@@ -216,16 +222,25 @@ class LedgerTests(unittest.TestCase):
         ]
         return refs, registration_ref
 
-    def _adopt_plan(self, plan_ref, _registration_ref=None, *, code=0):
-        return self.cli(
+    def _adopt_plan(
+        self,
+        plan_ref,
+        _registration_ref=None,
+        *,
+        code=0,
+        user_confirmed_task_count_exception=False,
+    ):
+        arguments = [
             "adopt-plan",
             "CE-0001",
             "--workflow-id",
             "WF-0001",
             "--plan-ref",
             plan_ref,
-            code=code,
-        )
+        ]
+        if user_confirmed_task_count_exception:
+            arguments.append("--user-confirmed-task-count-exception")
+        return self.cli(*arguments, code=code)
 
     def _commit_material(self, relative_path, text, message):
         (self.vault / relative_path).write_text(text, encoding="utf-8")
@@ -261,7 +276,14 @@ class LedgerTests(unittest.TestCase):
             code=code,
         )
 
-    def _adopt_plan_variant(self, plan_text, *, code=0, spec_ref=None):
+    def _adopt_plan_variant(
+        self,
+        plan_text,
+        *,
+        code=0,
+        spec_ref=None,
+        user_confirmed_task_count_exception=False,
+    ):
         plan_ref = self._commit_material(
             "plans/CE-0001.md",
             plan_text,
@@ -273,15 +295,46 @@ class LedgerTests(unittest.TestCase):
         )
         before_row = json.loads(self.cli("show", "CE-0001").stdout)
         before_workflow = json.loads(self.cli("workflow-show", "WF-0001").stdout)
-        result = self._adopt_plan(plan_ref, adoption_ref, code=code)
+        result = self._adopt_plan(
+            plan_ref,
+            adoption_ref,
+            code=code,
+            user_confirmed_task_count_exception=user_confirmed_task_count_exception,
+        )
         return result, before_row, before_workflow, refs
+
+    def _plan_with_task_count(self, count, exception_rows=None):
+        plan = (self.vault / "plans/CE-0001.md").read_text(encoding="utf-8")
+        prefix, task_body = plan.split("### Task 1:", 1)
+        task_template = "### Task 1:" + task_body
+        tasks = []
+        for number in range(1, count + 1):
+            tasks.append(
+                task_template.replace(
+                    "### Task 1: Synchronization guard",
+                    f"### Task {number}: Synchronization guard {number}",
+                    1,
+                )
+            )
+        if exception_rows is not None:
+            rows = "\n".join(
+                f"| Task {number} | {reason} | {boundary} |"
+                for number, reason, boundary in exception_rows
+            )
+            exception = (
+                "## Task 数量例外\n\n"
+                "| Task | 不能合并原因 | 边界类型 |\n"
+                "|---|---|---|\n"
+                f"{rows}\n\n"
+            )
+            prefix = prefix.replace("## 开发基线\n", exception + "## 开发基线\n")
+        return prefix + "\n---\n\n".join(tasks)
 
     def test_writing_plan_rejects_spec_without_existing_flow_impact_contract(self):
         spec = (self.vault / "specs/CE-0001.md").read_text(encoding="utf-8")
         start = spec.index("## 既有功能与流程影响")
-        end = spec.index("## 可能的影响范围（非行为契约）")
 
-        result = self._enter_writing_plan_with_spec(spec[:start] + spec[end:], code=2)
+        result = self._enter_writing_plan_with_spec(spec[:start], code=2)
 
         self.assertIn("既有功能与流程影响", result.stderr)
         self.assertEqual(
@@ -292,13 +345,22 @@ class LedgerTests(unittest.TestCase):
     def test_writing_plan_accepts_canonical_no_existing_flow_impact_conclusion(self):
         spec = (self.vault / "specs/CE-0001.md").read_text(encoding="utf-8")
         start = spec.index("## 既有功能与流程影响")
-        end = spec.index("## 可能的影响范围（非行为契约）")
         no_impact = (
             "## 既有功能与流程影响\n\n"
-            "- 结论：未发现与本需求直接关联的既有功能或流程。\n\n"
+            "- 结论：未发现与本需求直接关联的既有功能或流程。\n"
         )
 
-        self._enter_writing_plan_with_spec(spec[:start] + no_impact + spec[end:])
+        self._enter_writing_plan_with_spec(spec[:start] + no_impact)
+
+        self.assertEqual(
+            "writing_plan",
+            json.loads(self.cli("workflow-show", "WF-0001").stdout)["current_stage"],
+        )
+
+    def test_writing_plan_accepts_full_spec_without_code_impact_section(self):
+        spec = (self.vault / "specs/CE-0001.md").read_text(encoding="utf-8")
+
+        self._enter_writing_plan_with_spec(spec)
 
         self.assertEqual(
             "writing_plan",
@@ -307,11 +369,7 @@ class LedgerTests(unittest.TestCase):
 
     def test_writing_plan_rejects_no_impact_conclusion_combined_with_table(self):
         spec = (self.vault / "specs/CE-0001.md").read_text(encoding="utf-8")
-        spec = spec.replace(
-            "\n## 可能的影响范围",
-            "\n- 结论：未发现与本需求直接关联的既有功能或流程。\n\n"
-            "## 可能的影响范围",
-        )
+        spec += "\n- 结论：未发现与本需求直接关联的既有功能或流程。\n"
 
         result = self._enter_writing_plan_with_spec(spec, code=2)
 
@@ -320,9 +378,9 @@ class LedgerTests(unittest.TestCase):
     def test_writing_plan_rejects_misordered_existing_flow_impact_section(self):
         spec = (self.vault / "specs/CE-0001.md").read_text(encoding="utf-8")
         start = spec.index("## 既有功能与流程影响")
-        end = spec.index("## 可能的影响范围（非行为契约）")
-        impact_block = spec[start:end]
-        spec = spec[:start] + spec[end:] + "\n" + impact_block
+        impact_block = spec[start:]
+        boundary = spec.index("## 边界")
+        spec = spec[:boundary] + impact_block + "\n" + spec[boundary:start]
 
         result = self._enter_writing_plan_with_spec(spec, code=2)
 
@@ -349,8 +407,9 @@ class LedgerTests(unittest.TestCase):
             (
                 "duplicate-id",
                 lambda text: text.replace(
-                    "\n## 可能的影响范围",
-                    "\n| I-001 | 批注重试 | 重试复用原映射 | 新策略改变重试入口 | 兼容扩展 | 已写入规则或边界 |\n\n## 可能的影响范围",
+                    "| I-001 | 批注唯一同步 | 同一批注只创建一个映射 | 新策略复用映射入口 | 保持不变 | 无需修改 |\n",
+                    "| I-001 | 批注唯一同步 | 同一批注只创建一个映射 | 新策略复用映射入口 | 保持不变 | 无需修改 |\n"
+                    "| I-001 | 批注重试 | 重试复用原映射 | 新策略改变重试入口 | 兼容扩展 | 已写入规则或边界 |\n",
                 ),
                 "duplicate",
             ),
@@ -418,27 +477,28 @@ class LedgerTests(unittest.TestCase):
         self.assertIn("Global Constraints", result.stderr)
 
     def test_adopt_plan_rejects_missing_or_unknown_spec_impact_mapping(self):
-        base = (self.vault / "plans/CE-0001.md").read_text(encoding="utf-8")
         scenarios = (
             (
                 "missing",
-                base.replace("| I-001 |", "| implementation-only |"),
+                lambda text: text.replace("| I-001 |", "| implementation-only |"),
                 "I-001",
             ),
             (
                 "unknown",
-                base.replace(
+                lambda text: text.replace(
                     "\n---\n\n### Task 1",
                     "\n| I-999 | `other.py` | Shares a global queue | 无影响 | Separate identity key proves isolation | 无需任务 |\n\n---\n\n### Task 1",
                 ),
                 "I-999",
             ),
         )
-        for index, (label, plan, expected) in enumerate(scenarios):
+        for index, (label, transform, expected) in enumerate(scenarios):
             with self.subTest(label=label):
                 if index:
                     self.tearDown()
                     self.setUp()
+                base = (self.vault / "plans/CE-0001.md").read_text(encoding="utf-8")
+                plan = transform(base)
                 result, before_row, before_workflow, _ = self._adopt_plan_variant(
                     plan,
                     code=2,
@@ -451,51 +511,52 @@ class LedgerTests(unittest.TestCase):
                 )
 
     def test_adopt_plan_rejects_blocked_or_unmapped_technical_work(self):
-        base = (self.vault / "plans/CE-0001.md").read_text(encoding="utf-8")
         scenarios = (
             (
                 "blocked",
-                base.replace("| 无影响 |", "| 阻塞 |"),
+                lambda text: text.replace("| 无影响 |", "| 阻塞 |"),
                 "阻塞",
             ),
             (
                 "unknown-status",
-                base.replace("| 无影响 |", "| 待确认 |"),
+                lambda text: text.replace("| 无影响 |", "| 待确认 |"),
                 "技术影响",
             ),
             (
                 "adapt-no-task",
-                base.replace("| 无影响 |", "| 需要适配 |").replace(
+                lambda text: text.replace("| 无影响 |", "| 需要适配 |").replace(
                     "| 无需任务 |", "| 无需任务 |"
                 ),
                 "Task N",
             ),
             (
                 "migration-missing-task",
-                base.replace("| 无影响 |", "| 需要迁移 |").replace(
+                lambda text: text.replace("| 无影响 |", "| 需要迁移 |").replace(
                     "| 无需任务 |", "| Task 2 |"
                 ),
                 "Task 2",
             ),
             (
                 "no-impact-has-task",
-                base.replace("| 无需任务 |", "| Task 1 |"),
+                lambda text: text.replace("| 无需任务 |", "| Task 1 |"),
                 "无需任务",
             ),
             (
                 "empty-handling",
-                base.replace(
+                lambda text: text.replace(
                     "| Existing stable annotation ID remains the isolation key |",
                     "|  |",
                 ),
                 "concrete values",
             ),
         )
-        for index, (label, plan, expected) in enumerate(scenarios):
+        for index, (label, transform, expected) in enumerate(scenarios):
             with self.subTest(label=label):
                 if index:
                     self.tearDown()
                     self.setUp()
+                base = (self.vault / "plans/CE-0001.md").read_text(encoding="utf-8")
+                plan = transform(base)
                 result, _, _, _ = self._adopt_plan_variant(plan, code=2)
                 self.assertIn(expected, result.stderr)
 
@@ -590,12 +651,10 @@ class LedgerTests(unittest.TestCase):
     def test_adopt_plan_accepts_no_impact_spec_with_code_evidence(self):
         spec = (self.vault / "specs/CE-0001.md").read_text(encoding="utf-8")
         spec_start = spec.index("## 既有功能与流程影响")
-        spec_end = spec.index("## 可能的影响范围（非行为契约）")
         spec = (
             spec[:spec_start]
             + "## 既有功能与流程影响\n\n"
-            + "- 结论：未发现与本需求直接关联的既有功能或流程。\n\n"
-            + spec[spec_end:]
+            + "- 结论：未发现与本需求直接关联的既有功能或流程。\n"
         )
         spec_ref = self._commit_material(
             "specs/CE-0001.md",
@@ -620,12 +679,10 @@ class LedgerTests(unittest.TestCase):
     def test_adopt_plan_rejects_vague_no_intersection_evidence(self):
         spec = (self.vault / "specs/CE-0001.md").read_text(encoding="utf-8")
         spec_start = spec.index("## 既有功能与流程影响")
-        spec_end = spec.index("## 可能的影响范围（非行为契约）")
         spec = (
             spec[:spec_start]
             + "## 既有功能与流程影响\n\n"
-            + "- 结论：未发现与本需求直接关联的既有功能或流程。\n\n"
-            + spec[spec_end:]
+            + "- 结论：未发现与本需求直接关联的既有功能或流程。\n"
         )
         spec_ref = self._commit_material(
             "specs/CE-0001.md",
@@ -653,18 +710,42 @@ class LedgerTests(unittest.TestCase):
     def test_legacy_adopted_plan_can_continue_without_retroactive_impact_contract(self):
         spec = (self.vault / "specs/CE-0001.md").read_text(encoding="utf-8")
         spec_start = spec.index("## 既有功能与流程影响")
-        spec_end = spec.index("## 可能的影响范围（非行为契约）")
+        legacy_spec = (
+            spec[:spec_start]
+            + "## 可能的影响范围（非行为契约）\n\n"
+            + f"- 代码基线：`code-repo@{self.code_sha}`\n\n"
+            + "| 可能影响对象 | 当前路径 | 可能的影响类型 | 判断依据 |\n"
+            + "|---|---|---|---|\n"
+            + "| 同步入口 | `app.py` | 需要核对 | 与唯一同步规则相关 |\n"
+        )
         legacy_spec_ref = self._commit_material(
             "specs/CE-0001.md",
-            spec[:spec_start] + spec[spec_end:],
+            legacy_spec,
             "legacy spec",
         )
         plan = (self.vault / "plans/CE-0001.md").read_text(encoding="utf-8")
         plan_start = plan.index("## 实现兼容性分析")
         plan_end = plan.index("\n---\n", plan_start) + 1
+        legacy_plan = plan[:plan_start] + plan[plan_end:]
+        legacy_plan = legacy_plan.replace("> **Plan profile:** lean\n", "")
+        legacy_plan = legacy_plan.replace("- `base_repository`: `code-repo`\n", "")
+        legacy_plan = legacy_plan.replace("**Spec:** specs/CE-0001.md\n\n", "")
+        legacy_plan = legacy_plan.replace("**Acceptance:** tests/CE-0001.md\n\n", "")
+        legacy_plan = legacy_plan.replace(
+            "**Outcome:** The synchronization boundary preserves one mapping per annotation.\n\n",
+            "",
+        )
+        legacy_plan = legacy_plan.replace(
+            "**Implementation notes:**\n- Reuse the stable annotation identity at the persistence seam.\n\n",
+            "",
+        )
+        legacy_plan = legacy_plan.replace(
+            "**Test goal:** A duplicate annotation attempt fails before the guard is implemented.\n\n",
+            "",
+        )
         legacy_plan_ref = self._commit_material(
             "plans/CE-0001.md",
-            plan[:plan_start] + plan[plan_end:],
+            legacy_plan,
             "legacy plan",
         )
         self.create_change()
@@ -714,6 +795,9 @@ class LedgerTests(unittest.TestCase):
             }
         )
         final_ref = self._write_final_change(refs)
+        with closing(sqlite3.connect(self.db)) as connection:
+            connection.execute("DELETE FROM workflow_state WHERE workflow_id='WF-0001'")
+            connection.commit()
 
         self.assertEqual(
             "completed",
@@ -1415,12 +1499,16 @@ class LedgerTests(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stderr)
         contract = json.loads(result.stdout)
-        self.assertEqual((4, "adopt-plan"), (contract["contract_version"], contract["command"]))
+        self.assertEqual((5, "adopt-plan"), (contract["contract_version"], contract["command"]))
         self.assertNotIn("proof", contract)
         self.assertNotIn("adoption_change_ref", contract["arguments"])
         self.assertEqual(
             {"required": False, "writes": False},
             contract["arguments"]["dry_run"],
+        )
+        self.assertIn(
+            "user explicitly approved",
+            contract["arguments"]["user_confirmed_task_count_exception"]["meaning"],
         )
         self.assertEqual(
             ["change_ledger.plan_ref", "workflow_state.current_stage"],
@@ -1439,11 +1527,15 @@ class LedgerTests(unittest.TestCase):
             contract["preconditions"],
         )
         self.assertIn(
-            "candidate plan passes deterministic title, header, Task, Files, Interfaces, checkbox, and placeholder grammar",
+            "candidate plan uses the lean profile and passes deterministic title, header, Task, Files, Interfaces, checkbox, and placeholder grammar",
             contract["preconditions"],
         )
         self.assertIn(
-            "candidate plan declares the same source-specific baseline with a full 40-character base_sha",
+            "candidate plan owns an exact configured repository and source-specific baseline with a full 40-character base_sha",
+            contract["preconditions"],
+        )
+        self.assertIn(
+            "candidate plan contains 1-3 Tasks unless every Task has an independent delivery, dependency, or risk rationale and the user explicitly confirms the exception",
             contract["preconditions"],
         )
 
@@ -1455,6 +1547,84 @@ class LedgerTests(unittest.TestCase):
         workflow = json.loads(self.cli("workflow-show", "WF-0001").stdout)
         self.assertEqual((refs["plan_ref"], registration_ref), (row["plan_ref"], row["change_ref"]))
         self.assertEqual("tdd_coding", workflow["current_stage"])
+
+    def test_adopt_plan_rejects_plan_without_lean_profile_marker(self):
+        plan = (self.vault / "plans/CE-0001.md").read_text(encoding="utf-8")
+        plan = plan.replace("> **Plan profile:** lean\n", "")
+
+        result, _, _, _ = self._adopt_plan_variant(plan, code=2)
+
+        self.assertIn("Plan profile", result.stderr)
+
+    def test_adopt_plan_rejects_more_than_three_tasks_without_user_exception(self):
+        plan = self._plan_with_task_count(4)
+
+        result, _, _, _ = self._adopt_plan_variant(plan, code=2)
+
+        self.assertIn("default maximum of 3 Tasks", result.stderr)
+
+    def test_adopt_plan_rejects_support_only_task(self):
+        plan = (self.vault / "plans/CE-0001.md").read_text(encoding="utf-8")
+        plan = plan.replace("- Modify: `app.py`\n", "")
+
+        result, _, _, _ = self._adopt_plan_variant(plan, code=2)
+
+        self.assertIn("production Create or Modify target", result.stderr)
+
+    def test_adopt_plan_rejects_incomplete_task_count_exception(self):
+        plan = self._plan_with_task_count(
+            4,
+            exception_rows=(
+                (1, "Separate deliverable cannot ship with another task", "独立交付"),
+                (2, "Depends on an external compatibility boundary", "依赖"),
+                (3, "Owns a distinct payment authorization risk", "风险"),
+            ),
+        )
+
+        result, _, _, _ = self._adopt_plan_variant(
+            plan,
+            code=2,
+            user_confirmed_task_count_exception=True,
+        )
+
+        self.assertIn("one rationale row for every Task", result.stderr)
+
+    def test_adopt_plan_rejects_vague_or_duplicated_task_count_rationales(self):
+        plan = self._plan_with_task_count(
+            4,
+            exception_rows=(
+                (1, "x", "风险"),
+                (2, "Same generic rationale copied between task rows", "依赖"),
+                (3, "Same generic rationale copied between task rows", "风险"),
+                (4, "Owns a separate provider rollout boundary", "独立交付"),
+            ),
+        )
+
+        result, _, _, _ = self._adopt_plan_variant(
+            plan,
+            code=2,
+            user_confirmed_task_count_exception=True,
+        )
+
+        self.assertIn("concrete and unique", result.stderr)
+
+    def test_adopt_plan_accepts_four_tasks_with_confirmed_complete_exception(self):
+        plan = self._plan_with_task_count(
+            4,
+            exception_rows=(
+                (1, "Separate deliverable cannot ship with another task", "独立交付"),
+                (2, "Depends on an external compatibility boundary", "依赖"),
+                (3, "Owns a distinct payment authorization risk", "风险"),
+                (4, "Owns a separate provider rollout boundary", "独立交付"),
+            ),
+        )
+
+        result, _, _, _ = self._adopt_plan_variant(
+            plan,
+            user_confirmed_task_count_exception=True,
+        )
+
+        self.assertEqual("adopted", json.loads(result.stdout)["status"])
 
     def test_adopt_plan_dry_run_validates_without_persisting_or_advancing(self):
         refs, _ = self._prepare_atomic_adoption()

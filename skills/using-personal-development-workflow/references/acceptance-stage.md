@@ -4,7 +4,7 @@
 
 ## Direct / Light 验收
 
-在 Delivery 的当前 `code_ref` 快照上重新运行当前 CE 的轻量验证清单，记录实际命令、关键结果和必要截图或机器证据。相关未提交行为差异、失败或未执行项都不能完成；失败保留原 `change_id` 并返回实现，除非发现新的独立交付范围。
+在 Delivery 的当前 `code_ref` 快照上核对轻量验证清单。已绑定相同 `code_sha + command + environment_fingerprint + input_fingerprint` 的成功自动化证据直接复用，只实际执行尚未覆盖的项目；记录复用引用、实际命令、关键结果和必要截图或机器证据。相关未提交行为差异、失败或未执行项都不能完成；失败保留原 `change_id` 并返回实现，除非发现新的独立交付范围。
 
 验证通过后，由 CE 收尾过程统一把最终结果写进完成版 `changes/<change_id>/change.md` 的 `## 修改与验证摘要`；Worker 不直接修改 `change.md`。摘要只保留：
 
@@ -29,10 +29,11 @@ direct 完成必需 `change_ref`、`code_ref` 和上述摘要；light 额外必�
 
 ## Full：实际验收
 
-1. 用户要求验收后，按绑定版本测试稿实际操作。
-2. 执行第一个测试项前，确认实际运行内容与总账 `code_ref` 指向同一 Git commit，并确认没有会改变受测行为的相关未提交改动。无法证明时返回 `tdd_coding` 并停止。
-3. 按 `writing-test-drafts` 唯一报告合同生成并提交一份新的独立验收报告，不覆盖旧失败报告。
-4. 调用 `writing-test-drafts` 的唯一 validator，把当前 `change_id`、`test_ref` 和 `code_ref` 作为期望绑定。validator 无效时停止；有效时只消费其规范化结果，再用 `managing-change-ledger` 只更新 `evidence_ref`。
+1. 用户要求验收或 `full + auto` 到达验收阶段后，按绑定版本测试稿逐项核对覆盖状态。
+2. 执行第一个尚未覆盖的测试项前，确认实际运行内容与总账 `code_ref` 指向同一 Git commit，并确认没有会改变受测行为的相关未提交改动。无法证明时返回 `tdd_coding` 并停止。
+3. Acceptance 复用绑定同一 `code_ref` 的自动化证据：当 `code_sha + command + environment_fingerprint + input_fingerprint` 与 Delivery 成功证据完全一致，且证据包含 `scope`、`result=passed` 和 `produced_by=delivery` 时，只在报告中按 `writing-test-drafts` 的 `复用自动化证据：<compact-json>` 结构引用，不实际重跑；validator 机械核对证据结构和 `code_sha`。只执行测试稿中尚未覆盖的手工步骤、外部环境或真实服务验收。任一维度变化时旧证据失效并重新执行；复用通过项是 `passed`，不是 `not_executed`。
+4. 按 `writing-test-drafts` 唯一报告合同生成并提交一份新的独立验收报告，不覆盖旧失败报告；每一项明确标记复用证据或本阶段实际执行证据。
+5. 调用 `writing-test-drafts` 的唯一 validator，把当前 `change_id`、`test_ref` 和 `code_ref` 作为期望绑定。validator 无效时停止；有效时只消费其规范化结果，再用 `managing-change-ledger` 只更新 `evidence_ref`。
 
 结果路由：
 
@@ -60,7 +61,7 @@ Spec 与测试稿 → Plan → TDD 编码 → 内部验收 → 独立验收报�
 
 候选与保存稿固定为 `logic/<change_id>.md`，标题 `# <change_id> 最终逻辑稿`，必填 `## 功能逻辑`，可选 `## 注意事项`。内容按真实顺序讲清核心机制、触发、处理、结果及必要层级、重复触发或清理行为，不写代码导读或测试证据。
 
-先在对话中完整展示候选并停止。用户确认后才保存 canonical 文件；未确认、材料冲突或正文无法由实际代码与验收事实证明时保持 `acceptance`，不修改 `change.md`、SQLite 或代码。保存后仍保持本阶段并停止；不增加 SQLite 阶段或 `logic_ref`。
+`full + auto` 可以在已有有效验收报告后自动生成最终逻辑稿候选，但不能自动确认它。先在对话中完整展示候选并停止，形成最终验收确认门。用户确认后才保存 canonical 文件；未确认、材料冲突或正文无法由实际代码与验收事实证明时保持 `acceptance`，不修改 `change.md`、SQLite 或代码。保存后仍保持本阶段并停止；不增加 SQLite 阶段或 `logic_ref`。
 
 ## 完成变更事件
 

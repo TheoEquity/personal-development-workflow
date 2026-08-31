@@ -28,7 +28,7 @@ description: Use when a requirement or bug must be registered, formal-material G
 
 Full 验收通过后还形成 `logic/<change_id>.md` 最终逻辑稿，不增加 `logic_ref`。Direct/light 不强制生成逻辑稿、Plan、正式测试稿或验收报告，也不为缺失项创建空占位材料。讨论稿不属于规划或实现输入，不写入总账。不要创建 `code.md`；代码只用真实仓库提交定位。`workflow_state` 是运行游标，不是第七类正式材料，不进入 Spec Vault Git，也不替代任何正式引用。
 
-每个 `change_id` 只维护一份当前采用的正式 Plan 和一个 `plan_ref`；该 Plan 对应绑定该事件的个人工作流任务，并可在文档内部包含多个实现 `Task N`。实现 Task 不是总账身份，不产生独立的 `change_id`、`workflow_id` 或 `plan_ref`。分模块、并行执行、分别验证或逐 Task review 都仍属于同一事件。需要重新规划时，重新规划仍写入 `plans/<change_id>.md`，提交新版本并用新的完整 Git SHA 替换当前 `plan_ref`，不创建 Task 专属 Plan 路径。
+每个 `change_id` 只维护一份当前采用的正式 Plan 和一个 `plan_ref`；该 Plan 默认包含 1–3 个垂直实现 `Task N`，每个 Task 至少有一个非测试、文档或配置的生产代码 Create/Modify 目标。实现 Task 不是总账身份，不产生独立的 `change_id`、`workflow_id` 或 `plan_ref`。超过 3 个 Task 时，Plan 必须在 `## Task 数量例外` 为每个 Task 写明具体且逐项唯一、不能合并的独立交付、依赖或风险边界，并在正式采用时取得用户例外确认；否则机械拒绝。需要重新规划时，重新规划仍写入 `plans/<change_id>.md`，提交新版本并用新的完整 Git SHA 替换当前 `plan_ref`，不创建 Task 专属 Plan 路径。
 
 引用格式与 Vault 材料角色固定为：
 
@@ -173,9 +173,9 @@ python <skill-directory>/scripts/change_ledger.py --config <config-path> adopt-p
   --dry-run
 ```
 
-dry-run 与正式采用走同一验证路径，机械检查 Plan 标题与 Task grammar、每个 Task 的 Files/Consumes/Produces/checkbox、占位符、Spec impact 与实现兼容性表、覆盖和 Task 映射、canonical 引用、完整 SHA、Spec 代码基线、Plan 目标路径、适用 AGENTS，以及当前配置、事件、游标和阶段。成功返回 `status=validated` 与拟写入内容，但不修改 SQLite、`plan_ref`、`change_ref` 或 `current_stage`；失败时保持全部状态不变。省略或切换 `--config`、更换候选内容或形成新 `plan_ref` 后必须重新 dry-run，不能把旧结果跨项目或跨候选复用。
+dry-run 与正式采用走同一验证路径，机械检查 Lean profile 标记、Plan 标题与 Task grammar、每个 Task 的 Outcome/Files/Consumes/Produces/Implementation notes/Test goal/checkbox、占位符、Spec impact 与实现兼容性表、覆盖和 Task 映射、canonical 引用，以及 Plan 自有的代码仓库、完整基线、目标路径和适用 AGENTS，以及当前配置、事件、游标和阶段。成功返回 `status=validated` 与拟写入内容，但不修改 SQLite、`plan_ref`、`change_ref` 或 `current_stage`；失败时保持全部状态不变。省略或切换 `--config`、更换候选内容或形成新 `plan_ref` 后必须重新 dry-run，不能把旧结果跨项目或跨候选复用。
 
-dry-run 通过后才进行个人工作流定义的语义 reviewer。评审通过、主 Agent 审核且用户确认同一候选后，在仍处于 `writing_plan` 时一次执行正式采用：
+dry-run 通过后才进行个人工作流定义的语义 reviewer。评审通过、主 Agent 审核且当前模式采用同一候选后，在仍处于 `writing_plan` 时一次执行正式采用：
 
 ```powershell
 python <skill-directory>/scripts/change_ledger.py --config <config-path> adopt-plan CE-0001 `
@@ -183,11 +183,13 @@ python <skill-directory>/scripts/change_ledger.py --config <config-path> adopt-p
   --plan-ref plans/CE-0001.md@<full-vault-commit-sha>
 ```
 
-每次新的 `adopt-plan` 还要求候选 Plan 包含 `## 实现兼容性分析`。脚本在同一事务内读取不可变 Spec 与候选 Plan，要求全部 Spec `impact_id` 至少覆盖一次，只允许 Spec ID 或 `implementation-only` 来源；`无影响` 必须给出具体代码证据并写 `无需任务`，`需要适配` 或 `需要迁移` 必须给出处理方式并绑定候选 Plan 中真实存在、从 1 开始且无前导零、编号唯一的 `Task N`。Spec 标为 `明确改变` 的影响项至少要有一行 `需要适配` 或 `需要迁移`，不能只映射为 `无影响`；未知状态、未知 Spec ID、非法/重复 Task 编号或 `阻塞` 一律拒绝。Spec 使用无直接影响结论时，Plan 仍须给出至少一条 `implementation-only` 分析，或唯一的 ``- 无交点代码证据：<Spec 代码基线> | `<路径或符号>` | <具体理由>``；基线必须与该 Spec 的代码基线完全一致。
+普通 Plan 不传 Task 例外参数。4+ Task Plan 只有在 `## Task 数量例外` 对每个 Task 都有具体且逐项唯一的理由、reviewer 已核对其与实际 Task 边界相符，且用户明确确认该例外后，主 Agent才可在正式采用命令追加 `--user-confirmed-task-count-exception`。`review_mode=auto`、Worker、reviewer 或 Plan 正文中的自述都不能替代用户确认；缺确认或逐项理由时保持 `writing_plan` 且事务无写入。该 flag 是主 Agent 对当前用户消息的授权声明；第一轮不增加新的账本授权字段或材料。
 
-Plan adoption 不创建或修改 `change.md`，也不更新 `change_ref`。`adopt-plan` 直接从不可变 `spec_ref` 和候选 `plan_ref` 机械验证正式结构、影响覆盖、完整 SHA、角色路径、代码基线、Plan 目标位置和适用 AGENTS 清单；全部通过后在一个 `BEGIN IMMEDIATE` 事务内只原子更新 `plan_ref` 和工作流的 `tdd_coding` 阶段。任何影响合同或 adoption 校验失败都保持事务无写入；对同一已采纳 Plan 的重复或并发调用幂等。
+每次新的 `adopt-plan` 还要求候选 Plan 包含 `## 实现兼容性分析`。脚本在同一事务内读取不可变 Spec 与候选 Plan，要求全部 Spec `impact_id` 至少覆盖一次，只允许 Spec ID 或 `implementation-only` 来源；`无影响` 必须给出具体代码证据并写 `无需任务`，`需要适配` 或 `需要迁移` 必须给出处理方式并绑定候选 Plan 中真实存在、从 1 开始且无前导零、编号唯一的 `Task N`。Spec 标为 `明确改变` 的影响项至少要有一行 `需要适配` 或 `需要迁移`，不能只映射为 `无影响`；未知状态、未知 Spec ID、非法/重复 Task 编号或 `阻塞` 一律拒绝。Spec 使用无直接影响结论时，Plan 仍须给出至少一条 `implementation-only` 分析，或唯一的 ``- 无交点代码证据：<Plan base_repository>@<base_sha> | `<路径或符号>` | <具体理由>``；该基线必须由 Plan 的 `## 开发基线` 精确派生并解析到项目配置中的仓库 commit。
 
-新影响合同不追溯阻断已经采用旧 Plan、并已进入 `tdd_coding` 或 `acceptance` 的事件；它们可以继续原有验收和完成门。旧事件一旦回到 `writing_spec` 向前进入 Plan，或回到 `writing_plan` 重新采用 Plan，就必须满足当前合同。对已采用引用的精确幂等 `adopt-plan` 重试不重新要求历史文档补格式。
+Plan adoption 不创建或修改 `change.md`，也不更新 `change_ref`。`adopt-plan` 直接从不可变 `spec_ref` 和候选 `plan_ref` 机械验证正式结构、影响覆盖、完整 SHA、角色路径、Plan 自有代码基线、Plan 目标位置和适用 AGENTS 清单；全部通过后在一个 `BEGIN IMMEDIATE` 事务内只原子更新 `plan_ref` 和工作流的 `tdd_coding` 阶段。任何影响合同或 adoption 校验失败都保持事务无写入；对同一已采纳 Plan 的重复或并发调用幂等。
+
+当前 Lean Plan grammar 与新影响合同都不追溯阻断已经采用旧 Plan、并已进入 `tdd_coding` 或 `acceptance` 的事件；它们按采用时的基础 Plan grammar 继续原有验收和完成门，不要求补写 Lean 标记、执行边界或兼容性表。旧事件一旦回到 `writing_spec` 向前进入 Plan，或回到 `writing_plan` 重新采用 Plan，就必须满足当前合同。对已采用引用的精确幂等 `adopt-plan` 重试不重新要求历史文档补格式。
 
 查询游标或连同已绑定总账行查询：
 
@@ -296,7 +298,7 @@ Full 在逻辑稿确认后生成原完整完成版 `change.md`。Direct/light �
 
 Full 验收报告的唯一文本和可执行合同由 `writing-test-drafts` 定义，本 Skill 不复制其字段或 grammar。Full 的 `complete` 再次调用同一个 validator，并以 `require_passed` 门检查所引用的测试稿、最终报告和当前总账期望绑定；只有其规范化结果为全部通过才继续。旧测试稿报告、空壳、无效状态和代码块伪字段均不能完成。
 
-Full 的 `complete` 继续按 `writing-specs` 与 `writing-plans` 的正式结构拒绝空壳，并重新验证完整材料。Direct/light 改为按 flow 校验真实代码引用和修改与验证摘要；light 另校验短 Spec 结构。没有绑定活动工作流的旧事件按 full 处理，以保持向后兼容。
+Full 的 `complete` 继续按 `writing-specs` 与 `writing-lean-plans` 的正式结构拒绝空壳，并重新验证完整材料。Direct/light 改为按 flow 校验真实代码引用和修改与验证摘要；light 另校验短 Spec 结构。没有绑定活动工作流的旧事件按 full 处理，以保持向后兼容。
 
 对于 Full，该脚本只机械证明已提交报告、证据结构及引用绑定满足合同，不声称能从 Markdown 独立证明现实操作确已发生；实际执行义务仍由 `writing-test-drafts` 和可信 runner/controller 履行。Direct/light 则机械检查真实代码引用、短 Spec（如适用）与完成摘要，实际轻量验证仍须由可信执行者运行。
 
@@ -310,7 +312,7 @@ Full 完成前仍逐项检查：
 - 本次变更相关代码没有未纳入 `code_ref` 的工作区或暂存区改动；
 - 最终验收报告总体结论为“通过”，测试稿的每个关键步骤均有通过结果；
 - 验收报告通过 `writing-test-drafts` 唯一 validator 的期望绑定与 `require_passed` 校验；
-- Spec、Plan、代码基线、目标路径与适用 AGENTS 清单通过上述结构和绑定校验；
+- Spec、Plan、Plan 自有代码基线、目标路径与适用 AGENTS 清单通过上述结构和绑定校验；
 - `logic/<change_id>.md` 已由用户确认，含正确身份、具体的 `## 功能逻辑` 和至多一个可选 `## 注意事项`；
 - `change.md` 已更新为同一 `change_id`、`status: completed`、与总账逐字一致的其余五类最终引用，以及唯一的 canonical 最终逻辑稿路径；
 - 最终提交 tree 同时包含完成版 `change.md` 和该逻辑稿；SQLite 继续只有既有字段；
@@ -364,6 +366,7 @@ python <skill-directory>/scripts/change_ledger.py --config <config-path> list --
 | 每个阶段都重写 `change.md` 并推进 `change_ref` | 中间只更新 SQLite 材料引用；事件文档只在登记和完成时写 |
 | 为 Plan adoption 追加一个中间 `change.md` | 直接调用 `adopt-plan` 校验不可变 Spec/Plan，保持登记 `change_ref` 不变 |
 | 为 Plan 内每个实现 Task 新建 Plan、游标或事件 | Task 只在同一 `plans/<change_id>.md` 内拆分；总账继续维护该事件唯一的当前 `plan_ref` |
+| 把测试、文档、配置拆成独立 Task，或静默采用 4+ Task | 合并为默认 1–3 个垂直 Task；确有例外时逐项说明边界并取得用户确认 |
 | 为当前事件的 TDD 或内部验收失败新建 Bug 事件 | 保留失败报告，在同一 `in_progress` 事件内修正并重新验收 |
 | 把外部 Bug 反馈塞回已完成事件 | 新建事件，关联反馈发生时采用的 Spec 版本 |
 | 普通代码 Bug 也频繁修改 Spec | Spec 正文不改；在事件的 `## Spec 处理` 中记录适用 Spec 精确引用，没有适用 Spec 时记录相关 CE 或 `source_ce` |

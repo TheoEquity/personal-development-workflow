@@ -4,7 +4,10 @@ param(
     [string]$DestinationRoot = (Join-Path (Join-Path $HOME ".codex") "skills"),
 
     [Parameter()]
-    [switch]$Force
+    [switch]$Force,
+
+    [Parameter()]
+    [switch]$Check
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,7 +22,7 @@ $customSkills = @(
 )
 
 $requiredDependencies = @(
-    "writing-plans",
+    "writing-lean-plans",
     "using-git-worktrees",
     "subagent-driven-development",
     "executing-plans",
@@ -31,6 +34,10 @@ $requiredDependencies = @(
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $sourceRoot = Join-Path $repositoryRoot "skills"
 $destinationFullPath = [System.IO.Path]::GetFullPath($DestinationRoot)
+
+if ($Check -and $Force) {
+    throw "-Check is read-only and cannot be combined with -Force."
+}
 
 if (-not (Test-Path -LiteralPath $destinationFullPath -PathType Container)) {
     throw "Destination skill root does not exist: $destinationFullPath"
@@ -111,6 +118,83 @@ function Assert-ChildPath {
     }
 }
 
+function Get-CanonicalSkillFiles {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root
+    )
+
+    Get-ChildItem -LiteralPath $Root -File -Recurse | Where-Object {
+        $relativePath = $_.FullName.Substring($Root.Length).TrimStart(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        )
+        $parts = $relativePath -split "[\\/]"
+        "__pycache__" -notin $parts -and
+        ".pytest_cache" -notin $parts -and
+        $_.Extension -notin @(".pyc", ".sqlite", ".sqlite3", ".bak", ".tmp") -and
+        $_.Name -notlike "*.pre-*-backup"
+    }
+}
+
+function Get-RelativeFileMap {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Root,
+
+        [Parameter()]
+        [switch]$CanonicalSource
+    )
+
+    $files = if ($CanonicalSource) {
+        @(Get-CanonicalSkillFiles -Root $Root)
+    } else {
+        @(Get-ChildItem -LiteralPath $Root -File -Recurse)
+    }
+    $map = @{}
+    foreach ($file in $files) {
+        $relativePath = $file.FullName.Substring($Root.Length).TrimStart(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        ).Replace([System.IO.Path]::DirectorySeparatorChar, "/")
+        $map[$relativePath] = $file.FullName
+    }
+    return $map
+}
+
+function Get-InstallationDifferences {
+    $differences = @()
+    foreach ($skillName in $customSkills) {
+        $source = [System.IO.Path]::GetFullPath((Join-Path $sourceRoot $skillName))
+        $target = [System.IO.Path]::GetFullPath((Join-Path $destinationFullPath $skillName))
+        if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+            $differences += "missing installation: $skillName"
+            continue
+        }
+
+        $sourceFiles = Get-RelativeFileMap -Root $source -CanonicalSource
+        $targetFiles = Get-RelativeFileMap -Root $target
+        foreach ($relativePath in @($sourceFiles.Keys | Sort-Object)) {
+            $displayPath = "$skillName/$relativePath"
+            if (-not $targetFiles.ContainsKey($relativePath)) {
+                $differences += "missing from installation: $displayPath"
+                continue
+            }
+            $sourceHash = (Get-FileHash -LiteralPath $sourceFiles[$relativePath] -Algorithm SHA256).Hash
+            $targetHash = (Get-FileHash -LiteralPath $targetFiles[$relativePath] -Algorithm SHA256).Hash
+            if ($sourceHash -ne $targetHash) {
+                $differences += "content differs: $displayPath"
+            }
+        }
+        foreach ($relativePath in @($targetFiles.Keys | Sort-Object)) {
+            if (-not $sourceFiles.ContainsKey($relativePath)) {
+                $differences += "extra in installation: $skillName/$relativePath"
+            }
+        }
+    }
+    return @($differences)
+}
+
 function Copy-SkillTree {
     param(
         [Parameter(Mandatory)]
@@ -121,10 +205,7 @@ function Copy-SkillTree {
     )
 
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-    Get-ChildItem -LiteralPath $Source -File -Recurse | Where-Object {
-        $_.FullName -notmatch "[\\/]__pycache__[\\/]" -and
-        $_.Extension -notin @(".pyc", ".sqlite", ".sqlite3")
-    } | ForEach-Object {
+    Get-CanonicalSkillFiles -Root $Source | ForEach-Object {
         $relativePath = $_.FullName.Substring($Source.Length).TrimStart(
             [System.IO.Path]::DirectorySeparatorChar,
             [System.IO.Path]::AltDirectorySeparatorChar
@@ -134,6 +215,15 @@ function Copy-SkillTree {
         New-Item -ItemType Directory -Path $targetParent -Force | Out-Null
         Copy-Item -LiteralPath $_.FullName -Destination $targetFile
     }
+}
+
+if ($Check) {
+    $differences = @(Get-InstallationDifferences)
+    if ($differences.Count -gt 0) {
+        throw "Installation differs from canonical source:`n$($differences -join [Environment]::NewLine)"
+    }
+    Write-Output "Installation matches canonical source at $destinationFullPath"
+    return
 }
 
 $existingSkills = @(

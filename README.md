@@ -2,7 +2,7 @@
 
 这是一个面向 Codex 的个人开发工作流包。它把需求确认、变更登记、Spec、测试稿、Plan、TDD 实现、验收和返工串成一条可恢复、可追踪的流程。
 
-本仓库只包含六个定制 Skill。Superpowers 原生 Skill 是外部只读依赖，本仓库不复制、不修改它们。
+本仓库是六个定制 Skill 的唯一规范源。安装副本只反映仓库中的规范文件；缓存、临时文件、手工规则和独立修改都不属于可发布版本。Superpowers 原生 Skill 是外部只读依赖，本仓库不复制、不修改它们。
 
 ## 包含的 Skill
 
@@ -36,9 +36,9 @@ flowchart TD
     Q -->|local| K["验证精确本地 SHA 与干净 worktree"]
     R -->|否| G
     R -->|是| K["从该 SHA 创建或确认隔离 worktree"]
-    K --> L["TDD + 多个 Task 实现和本地提交"]
-    L --> M["从实际 worktree 写入 code_ref"]
-    M --> N["按测试稿实际验收并生成独立报告"]
+    K --> L["一个 Worker 内执行 1–3 个垂直 Task"]
+    L --> M["Delivery 在最终候选 SHA 完整验证并写入 code_ref"]
+    M --> N["复用自动化证据，只执行未覆盖验收"]
     N -->|通过| O["形成并确认最终逻辑稿"]
     O --> S["写完成版 change.md 并完成事件"]
     N -->|失败| P["统一材料变更评估并等待确认"]
@@ -58,9 +58,9 @@ flowchart TD
 → 编写、独立评审并采用 Plan
 → 询问是否开启 SDD
 → 按 Plan 的本地或远程来源验证精确 SHA
-→ 从该 SHA 建立 worktree + TDD + 实现与本地提交
-→ code_ref
-→ 实际验收与独立报告
+→ 从该 SHA 建立一个 Worker worktree + 1–3 个垂直 Task + 本地提交
+→ Delivery 在最终候选合并 SHA 运行一次完整自动化验证并写入 code_ref
+→ 复用相同 code_ref 的自动化证据，只执行未覆盖验收并生成独立报告
 → 形成并确认最终逻辑稿
 → 完成 change.md / 关闭事件与游标
 ```
@@ -80,7 +80,7 @@ logic/<change_id>.md
 
 版本不靠另建文件名区分，而由 `路径@完整 Git SHA` 定位。最终逻辑稿不增加 SQLite 字段；它由最终 `change_ref` 的同一 Git commit SHA 锁定，派生定位为 `logic/<change_id>.md@<final-change-ref-sha>`。
 
-一个 Plan 对应一个工作流任务和一个变更事件；一个 Plan 内部可以拆成多个 Task。多个 Task 共享同一份 Spec、Plan、代码快照和完成边界，不为每个 Task 新建事件。
+一个 Plan 对应一个工作流任务和一个变更事件；所有正式 Plan 始终为 Lean，默认只含 1–3 个垂直 Task，不再用多个 Task 表达文件级微步骤。Task 共享同一份 Spec、Plan、Worker worktree、代码快照和完成边界，测试、文档和配置不单独成 Task。4+ Task 必须逐项说明不可合并边界并取得用户例外确认。
 
 `change.md` 只写两次：
 
@@ -115,15 +115,17 @@ Spec 和测试稿就绪后，每次创建 Plan 或形成新的 `plan_ref` 都先
 
 未提交修改不属于任何 SHA。dirty worktree 的 HEAD 可以作为本地候选，但 Plan 调查、评审和后续实现不得混入这些 dirty 修改；若用户要纳入，必须先另行授权形成一次精确的 `baseline-capture:<change_id>` 快照 commit，再重新展示候选。授权前用 HEAD 和排序后的 path/state/mode/content OID 清单冻结 `baseline_snapshot`，暂存前与 commit 前机械复核且禁止清单外 index 条目。该提交只是对原样既有 diff 的基线捕获，不允许编辑，不要求事后追溯制造 RED，也不构成 TDD 或实现完成证据；后续实现仍正常执行 TDD。候选在等待期间移动时，本次选择失效并重新确认。
 
-选择后才使用外部原生 `writing-plans` 形成 Plan。Plan 必须记录 `base_source`、可读 `base_locator` 和评审代码所用的 40 位完整 `base_sha`；远程来源还记录 `base_remote` 与 `base_branch`，本地来源另记 `base_worktree`、`base_local_branch`、`base_detached_sha`，供机械验证而不从带分隔符的 locator 字符串反向解析。Plan 经过独立 reviewer 后，由 `managing-change-ledger adopt-plan` 原子安装新的 `plan_ref`；只有采用成功后才进入 `tdd_coding`。
+选择基线后才使用外部 `writing-lean-plans` 形成唯一支持的正式 Lean Plan。个人工作流不保存固定角色模型或 `high/xhigh` 表；普通阶段继承当前有效配置，SDD 按任务复杂度选择足够完成任务的最低合理档位。Plan 在选定 `base_sha` 的精确 Git tree 上调查代码影响，并记录 `base_repository`、`base_source`、可读 `base_locator` 和评审代码所用的 40 位完整 `base_sha`；远程来源还记录 `base_remote` 与 `base_branch`，本地来源另记 `base_worktree`、`base_local_branch`、`base_detached_sha`，供机械验证而不从带分隔符的 locator 字符串反向解析。Plan 经过独立 reviewer 后，由 `managing-change-ledger adopt-plan` 原子安装新的 `plan_ref`；只有采用成功后才进入 `tdd_coding`。
 
 同一轮并行处理多个 Bug 时，候选选择提升为整轮共用的一张卡片和一次选择，而不是强制远程：第一轮目标分支头、已有开放 MR 时的 MR 实际源分支头只是远程候选；相关本地 commit 仍作为本地候选展示。整轮明确选择本地后，每个 Bug Plan 记录相同的 `base_source=local`、来源定位和完整 `base_sha`，每个独立 Worktree 都从该 SHA 创建；该 commit 可以尚未推送，也不执行远程相等性比较。只回复“继续”仍选择卡片中的唯一远程候选。
 
-进入编码前，总控先展示不可变 `authorization_offer`，其中固定仓库、`plan_ref`/Plan 范围、所选基线来源与完整 SHA、来源验证权限、允许创建 worktree、本地 commit 和禁止 finishing 的边界；尚不存在的开发 worktree 不得猜测。然后必须逐字询问：
+进入编码前，总控先实例化不可变 `authorization_offer`，其中固定仓库、`plan_ref`/Plan 范围、所选基线来源与完整 SHA、来源验证权限、允许创建 worktree、本地 commit 和禁止 finishing 的边界；尚不存在的开发 worktree 不得猜测。`review_mode=manual` 完整展示后逐字询问：
 
 > 是否开启 Subagent-Driven Development 进行开发？
 
-`authorization_offer` 展示后不可改写；只有当前对话中的明确肯定才接受这份原样 offer，并授权验证 Plan 已选择的基线、创建或进入隔离 worktree、按当前 Plan 编码，以及在该范围创建本地 commits。远程来源会先 fetch Plan 指定分支；fetch 只更新本地 remote-tracking ref，不会对远程写入，也不会 pull、merge 或 reset 主 checkout。本地来源不执行远程 fetch 或相等性比较，只验证所选 commit 存在，并使用 HEAD 精确等于 `base_sha` 的干净隔离 worktree。
+`authorization_offer` 实例化后不可改写。`manual` 只有当前对话中的明确肯定才接受；`full + auto` 不再询问 SDD，但只可在当前已绑定 CE、当前精确 `plan_ref` 和一个实现 Worker 范围内自动推进到最终验收确认门。两者都不授权合入 Delivery、远端动作或清理。远程来源会先 fetch Plan 指定分支；fetch 只更新本地 remote-tracking ref，不会对远程写入，也不会 pull、merge 或 reset 主 checkout。本地来源不执行远程 fetch 或相等性比较，只验证所选 commit 存在，并使用 HEAD 精确等于 `base_sha` 的干净隔离 worktree。
+
+实现和验收共用证据键 `code_sha + command + environment_fingerprint + input_fingerprint`。Task Implementer 负责 TDD/聚焦测试，Reviewer 消费已有证据，SDD 最终整体 review 同时满足 Full CE review；Implementation handoff 机械绑定 Worker HEAD、结构化成功证据和报告摘要。Delivery 是最终候选完整自动化验证的唯一执行者，Acceptance 只执行未覆盖的手工、外部环境或真实服务步骤。任一维度变化时证据失效并重验。
 
 远程来源 fetch 后必须解析最新完整 SHA。它与 Plan `base_sha` 一致时，才从该 SHA 创建或确认 worktree；不一致时立即关闭代码门，重新执行材料变更评估和基线选择。任何来源的验证失败或材料重新采用前，都不得创建开发 worktree、写 RED/测试/代码或创建本地 commit。创建成功后才从已接受 offer 机械派生最终 `execution_contract`，唯一新增值是工具实际返回并验证的 worktree/branch；仓库、Plan 范围和其他权限字段必须逐项相等，禁止扩权。该授权始终不包含 push、PR、merge、清理或 branch finishing。
 
@@ -169,6 +171,14 @@ pwsh -NoProfile -File scripts/install.ps1 -DestinationRoot '<absolute-skill-root
 
 目标中已有任一定制 Skill 时，安装器默认拒绝覆盖。确认需要替换时显式使用 `-Force`；旧目录会先备份到目标根的 `.personal-development-workflow-backups/<UTC timestamp>/`。
 
+只读检查安装副本是否与仓库规范文件逐字节一致：
+
+```powershell
+pwsh -NoProfile -File scripts/install.ps1 -Check
+```
+
+发现缺失、内容差异、缓存、备份或其他额外文件时，检查列出差异并失败，不会静默选择任一版本。
+
 安装器不会创建项目配置、数据库、变更材料或远端资源。
 
 ## 测试
@@ -179,7 +189,7 @@ pwsh -NoProfile -File scripts/install.ps1 -DestinationRoot '<absolute-skill-root
 pwsh -NoProfile -File scripts/test.ps1
 ```
 
-测试覆盖包边界、安装安全、六个 Skill 的合同与脚本、Python 编译，以及发布副本的路径可移植性。
+测试覆盖包边界、安装安全与源码/安装一致性、六个 Skill 的合同与脚本、Python 编译，以及发布副本的路径可移植性。
 
 ## 安全边界
 

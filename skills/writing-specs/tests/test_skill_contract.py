@@ -45,7 +45,9 @@ class WritingSpecsContractTests(unittest.TestCase):
     def test_behavior_uncertainty_stops_in_spec_and_is_not_code_impact_range(self):
         self.assertIn("必须停在 Spec 阶段", self.text)
         self.assertIn("不得交给 Plan 决定", self.text)
-        self.assertIn("与“可能的影响范围”", self.text)
+        self.assertIn("由 Plan 在选定 `base_sha` 后调查", self.text)
+        self.assertNotIn("可能的影响范围", self.text)
+        self.assertNotIn("代码基线：", self.text)
 
     def test_light_profile_is_short_and_does_not_reintroduce_full_gates(self):
         for required in (
@@ -56,7 +58,7 @@ class WritingSpecsContractTests(unittest.TestCase):
             "完成条件",
             "必须保持不变的行为或关键兼容边界",
             "不强制既有功能影响表",
-            "不扫描代码 SHA",
+            "不执行代码实现调查",
             "不生成正式测试稿",
             "不生成 `test_ref`",
         ):

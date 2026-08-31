@@ -16,7 +16,7 @@ CUSTOM_SKILLS = {
     "writing-final-logic-drafts",
 }
 DEPENDENCIES = {
-    "writing-plans",
+    "writing-lean-plans",
     "using-git-worktrees",
     "subagent-driven-development",
     "executing-plans",
@@ -24,6 +24,20 @@ DEPENDENCIES = {
     "verification-before-completion",
     "finishing-a-development-branch",
 }
+
+IGNORED_PARTS = {"__pycache__", ".pytest_cache"}
+IGNORED_SUFFIXES = {".pyc", ".sqlite", ".sqlite3", ".bak", ".tmp"}
+
+
+def canonical_files(skill_root):
+    return {
+        path.relative_to(skill_root).as_posix(): path.read_bytes()
+        for path in skill_root.rglob("*")
+        if path.is_file()
+        and not IGNORED_PARTS.intersection(path.relative_to(skill_root).parts)
+        and path.suffix not in IGNORED_SUFFIXES
+        and ".pre-" not in path.name
+    }
 
 
 def powershell_executable():
@@ -127,6 +141,59 @@ class InstallerTests(unittest.TestCase):
                 (backups[0] / "writing-specs" / "local-marker.txt").is_file()
             )
 
+    def test_check_reports_an_exact_match_after_install(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            destination = self.create_destination_with_dependencies(
+                Path(temporary_directory)
+            )
+            installed = run_installer(destination)
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+
+            checked = run_installer(destination, "-Check")
+
+            self.assertEqual(
+                checked.returncode,
+                0,
+                f"stdout:\n{checked.stdout}\nstderr:\n{checked.stderr}",
+            )
+            self.assertIn("matches canonical source", checked.stdout)
+
+    def test_check_rejects_content_drift_and_unmanaged_files(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            destination = self.create_destination_with_dependencies(
+                Path(temporary_directory)
+            )
+            installed = run_installer(destination)
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            target = destination / "writing-specs"
+            (target / "SKILL.md").write_text("local divergence\n", encoding="utf-8")
+            (target / "local-rule.md").write_text("unmanaged\n", encoding="utf-8")
+
+            checked = run_installer(destination, "-Check")
+
+            self.assertNotEqual(checked.returncode, 0)
+            output = checked.stdout + checked.stderr
+            self.assertIn("content differs: writing-specs/SKILL.md", output)
+            self.assertIn("extra in installation:", output)
+            self.assertIn("writing-specs/local-rule.md", output)
+
+    def test_installed_custom_skill_trees_equal_canonical_source_trees(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            destination = self.create_destination_with_dependencies(
+                Path(temporary_directory)
+            )
+
+            installed = run_installer(destination)
+
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            source_root = REPO_ROOT / "skills"
+            for skill_name in CUSTOM_SKILLS:
+                self.assertEqual(
+                    canonical_files(source_root / skill_name),
+                    canonical_files(destination / skill_name),
+                    skill_name,
+                )
+
     def test_missing_superpowers_dependencies_stop_without_installing(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             destination = Path(temporary_directory) / "skills"
@@ -144,7 +211,7 @@ class InstallerTests(unittest.TestCase):
             destination = self.create_destination_with_dependencies(
                 Path(temporary_directory)
             )
-            (destination / "writing-plans" / "SKILL.md").write_text(
+            (destination / "writing-lean-plans" / "SKILL.md").write_text(
                 "---\nname: unrelated-skill\ndescription: forged dependency\n---\n",
                 encoding="utf-8",
             )
@@ -153,6 +220,20 @@ class InstallerTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Invalid Superpowers skill identity", result.stdout + result.stderr)
+            for skill_name in CUSTOM_SKILLS:
+                self.assertFalse((destination / skill_name).exists())
+
+    def test_missing_writing_lean_plans_stops_without_installing(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            destination = self.create_destination_with_dependencies(
+                Path(temporary_directory)
+            )
+            shutil.rmtree(destination / "writing-lean-plans")
+
+            result = run_installer(destination)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("writing-lean-plans", result.stdout + result.stderr)
             for skill_name in CUSTOM_SKILLS:
                 self.assertFalse((destination / skill_name).exists())
 

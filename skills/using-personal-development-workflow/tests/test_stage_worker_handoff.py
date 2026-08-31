@@ -16,9 +16,7 @@ def stage_inputs(stage, repository_path, workspace_path, vault_sha, repository_s
     common = {"repository_path": str(repository_path)}
     if stage == "writing_spec":
         return {
-            **common,
             "change_ref": f"changes/CE-0006/change.md@{vault_sha}",
-            "code_sha": repository_sha,
             "related_formal_refs": "none",
             "acceptance_steps_ref": "none",
         }
@@ -28,7 +26,6 @@ def stage_inputs(stage, repository_path, workspace_path, vault_sha, repository_s
             "change_ref": f"changes/CE-0006/change.md@{vault_sha}",
             "spec_ref": f"specs/CE-0006.md@{vault_sha}",
             "test_ref": f"tests/CE-0006.md@{vault_sha}",
-            "plan_profile": "lean",
             "base_source": "local",
             "base_locator": "selected local commit",
             "base_sha": repository_sha,
@@ -120,6 +117,22 @@ def run_git(root, *args):
         encoding="utf-8",
     )
     return result.stdout.strip()
+
+
+def write_implementation_report(path, artifact_ref, evidence):
+    structured = {
+        "artifact_ref": artifact_ref,
+        "review_status": "Approved",
+        "verification_evidence": evidence,
+    }
+    path.write_text(
+        "# Implementation report\n\n"
+        "## Structured Result\n\n"
+        "```json\n"
+        + json.dumps(structured, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n```\n",
+        encoding="utf-8",
+    )
 
 
 class StageWorkerHandoffTests(unittest.TestCase):
@@ -286,17 +299,32 @@ class StageWorkerHandoffTests(unittest.TestCase):
             input_refs=self.inputs("implementation", "d"),
         )
         handoff_path = Path(result["handoff_path"])
+        report_path = Path(result["report_path"])
+        head = run_git(self.worktree, "rev-parse", "HEAD")
+        evidence = [
+            {
+                "code_sha": head,
+                "command": "python -m unittest tests.test_feature",
+                "environment_fingerprint": "python-3.13-windows",
+                "input_fingerprint": "fixtures-v1-default-args",
+                "scope": "Task 1 focused tests",
+                "result": "passed",
+                "produced_by": "task_implementer",
+            }
+        ]
+        write_implementation_report(report_path, "repo@" + head, evidence)
 
         updated = module.write_handoff(
             self.config,
             handoff_path,
             expected_revision=0,
             status="complete",
-            artifact_ref="forentx-frontend@" + "e" * 40,
+            artifact_ref="repo@" + head,
             review_status="Approved",
             summary=["3 tasks complete", "all tests pass"],
             needs_user_decision=[],
             blockers=[],
+            verification_evidence=evidence,
         )
 
         self.assertEqual(updated["workflow_id"], "WF-001")
@@ -307,6 +335,156 @@ class StageWorkerHandoffTests(unittest.TestCase):
         )
         self.assertEqual(updated["status"], "complete")
         self.assertEqual(updated["review_status"], "Approved")
+        self.assertRegex(updated["report_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(len(updated["verification_evidence"]), 1)
+
+    def test_implementation_complete_requires_head_bound_unique_evidence_and_report(self):
+        module = load_module()
+        result = module.init_handoff(
+            self.config,
+            workflow_id="WF-001",
+            change_id="CE-0006",
+            stage="implementation",
+            role="implementation_coordinator",
+            input_refs=self.inputs("implementation", "d"),
+        )
+        handoff_path = Path(result["handoff_path"])
+        head = run_git(self.worktree, "rev-parse", "HEAD")
+        evidence = {
+            "code_sha": head,
+            "command": "python -m unittest tests.test_feature",
+            "environment_fingerprint": "python-3.13-windows",
+            "input_fingerprint": "fixtures-v1-default-args",
+            "scope": "Task 1 focused tests",
+            "result": "passed",
+            "produced_by": "task_implementer",
+        }
+
+        with self.assertRaises(module.ContractError):
+            module.write_handoff(
+                self.config,
+                handoff_path,
+                expected_revision=0,
+                status="complete",
+                artifact_ref="repo@" + head,
+                review_status="Approved",
+                verification_evidence=[evidence],
+            )
+
+        Path(result["report_path"]).write_text("# Final report\n", encoding="utf-8")
+        with self.assertRaises(module.ContractError):
+            module.write_handoff(
+                self.config,
+                handoff_path,
+                expected_revision=0,
+                status="complete",
+                artifact_ref="repo@" + head,
+                review_status="Approved",
+                verification_evidence=[evidence],
+            )
+        write_implementation_report(
+            Path(result["report_path"]), "repo@" + head, [evidence]
+        )
+        report_path = Path(result["report_path"])
+        report_path.write_text(
+            report_path.read_text(encoding="utf-8").replace(
+                '"review_status":"Approved"',
+                '"review_status":"Approved","review_status":"Approved"',
+                1,
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(module.ContractError):
+            module.write_handoff(
+                self.config,
+                handoff_path,
+                expected_revision=0,
+                status="complete",
+                artifact_ref="repo@" + head,
+                review_status="Approved",
+                verification_evidence=[evidence],
+            )
+        write_implementation_report(report_path, "repo@" + head, [evidence])
+        with self.assertRaises(module.ContractError):
+            module.write_handoff(
+                self.config,
+                handoff_path,
+                expected_revision=0,
+                status="complete",
+                artifact_ref="repo@" + head,
+                review_status="Approved",
+                verification_evidence=[{**evidence, "code_sha": "e" * 40}],
+            )
+        with self.assertRaises(module.ContractError):
+            module.write_handoff(
+                self.config,
+                handoff_path,
+                expected_revision=0,
+                status="complete",
+                artifact_ref="repo@" + head,
+                review_status="Approved",
+                verification_evidence=[evidence, evidence],
+            )
+
+        write_implementation_report(
+            Path(result["report_path"]), "repo@" + head, [evidence]
+        )
+        completed = module.write_handoff(
+            self.config,
+            handoff_path,
+            expected_revision=0,
+            status="complete",
+            artifact_ref="repo@" + head,
+            review_status="Approved",
+            verification_evidence=[evidence],
+        )
+        Path(result["report_path"]).write_text("# Substituted report\n", encoding="utf-8")
+        with self.assertRaises(module.ContractError):
+            module.validate_handoff(
+                self.config,
+                handoff_path,
+                workflow_id="WF-001",
+                change_id="CE-0006",
+                stage="implementation",
+                role="implementation_coordinator",
+                input_refs=self.inputs("implementation", "d"),
+            )
+        self.assertRegex(completed["report_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_legacy_optional_stage_inputs_can_resume_without_becoming_new_requirements(self):
+        module = load_module()
+        spec_inputs = self.inputs("writing_spec")
+        spec_inputs["repository_path"] = str(self.repository)
+        spec_inputs["code_sha"] = self.repository_shas["a"]
+        spec_run = module.init_handoff(
+            self.config,
+            workflow_id="WF-001",
+            change_id="CE-0006",
+            stage="writing_spec",
+            role="spec_worker",
+            input_refs=spec_inputs,
+        )
+        module.validate_handoff(
+            self.config,
+            spec_run["handoff_path"],
+            workflow_id="WF-001",
+            change_id="CE-0006",
+            stage="writing_spec",
+            role="spec_worker",
+            input_refs=spec_inputs,
+        )
+
+        plan_inputs = self.inputs("writing_plan")
+        plan_inputs["plan_profile"] = "full"
+        plan_run = module.init_handoff(
+            self.config,
+            workflow_id="WF-002",
+            change_id="CE-0006",
+            stage="writing_plan",
+            role="plan_worker",
+            input_refs=plan_inputs,
+        )
+        self.assertTrue(Path(plan_run["handoff_path"]).is_file())
 
     def test_changed_inputs_create_a_new_run_without_overwriting_the_old_handoff(self):
         module = load_module()
@@ -373,7 +551,7 @@ class StageWorkerHandoffTests(unittest.TestCase):
             )
 
         spec_inputs = self.inputs("writing_spec")
-        spec_inputs["code_sha"] = "f" * 40
+        spec_inputs.pop("related_formal_refs")
         with self.assertRaises(module.ContractError):
             module.init_handoff(
                 self.config,
@@ -395,6 +573,37 @@ class StageWorkerHandoffTests(unittest.TestCase):
                 role="plan_worker",
                 input_refs=plan_inputs,
             )
+
+    def test_spec_handoff_does_not_require_a_code_repository_or_sha(self):
+        module = load_module()
+        inputs = self.inputs("writing_spec")
+
+        result = module.init_handoff(
+            self.config,
+            workflow_id="WF-001",
+            change_id="CE-0006",
+            stage="writing_spec",
+            role="spec_worker",
+            input_refs=inputs,
+        )
+
+        self.assertTrue(Path(result["handoff_path"]).is_file())
+
+    def test_plan_handoff_has_one_implicit_lean_profile(self):
+        module = load_module()
+        inputs = self.inputs("writing_plan")
+
+        result = module.init_handoff(
+            self.config,
+            workflow_id="WF-001",
+            change_id="CE-0006",
+            stage="writing_plan",
+            role="plan_worker",
+            input_refs=inputs,
+        )
+
+        handoff = json.loads(Path(result["handoff_path"]).read_text(encoding="utf-8"))
+        self.assertNotIn("plan_profile", handoff["input_refs"])
 
     def test_plan_approved_requires_exact_artifact_review_and_no_blockers(self):
         module = load_module()

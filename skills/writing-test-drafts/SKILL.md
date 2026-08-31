@@ -30,7 +30,7 @@ validate_acceptance_report(
 )
 ```
 
-函数返回可 JSON 序列化的字典，包括 `overall_status`、`passed_test_ids`、`failed_test_ids`、`not_executed_ids`、`failure_handoff_required`、`failure_handoff_valid`、规范化测试项和失败回传。调用方把 `AcceptanceReportError` 视为报告无效；`require_passed=True` 只接受所有测试项均为 `passed` 的报告。
+函数返回可 JSON 序列化的字典，包括 `overall_status`、`passed_test_ids`、`failed_test_ids`、`not_executed_ids`、`reused_automation_evidence`、`failure_handoff_required`、`failure_handoff_valid`、规范化测试项和失败回传。调用方把 `AcceptanceReportError` 视为报告无效；`require_passed=True` 只接受所有测试项均为 `passed` 的报告。
 
 CLI 用法：
 
@@ -140,9 +140,13 @@ test_id: T-002
 
 ## 执行测试稿并生成验收报告
 
-用户要求执行或验收测试稿时，读取总控指定的完整 `test_ref=tests/<change_id>.md@<full-vault-commit-sha>`，按其中的测试项实际操作，并生成一份新的验收报告。正式验收报告必须绑定同一 `change_id`；没有事件身份时停止生成正式报告并请求上游提供，不能写“未提供”冒充绑定。
+用户要求执行或验收测试稿时，读取总控指定的完整 `test_ref=tests/<change_id>.md@<full-vault-commit-sha>`，逐项核对已有有效证据或实际操作，并生成一份新的验收报告。正式验收报告必须绑定同一 `change_id`；没有事件身份时停止生成正式报告并请求上游提供，不能写“未提供”冒充绑定。
 
 开始第一个测试项前，必须确认目标 Git SHA 是完整 object ID 且精确解析为该 commit、实际运行内容与代码版本完全一致，并通过只读检查确认本次变更相关文件没有会改变受测行为的未提交改动。不得用旧 `HEAD`、“当前工作区”或暂存区状态代替已提交的 `code_ref`。仓库存在无关的用户改动不构成阻塞，也不得清理或提交这些无关改动。无法证明代码快照一致时，停止在验收前置检查，不执行测试项、不声称已经生成验收结果，并请求上游重新验证和形成已授权的本地代码 commit。
+
+自动化成功证据的精确复用键是 `code_sha + command + environment_fingerprint + input_fingerprint`。总控提供的证据只有在四项与当前 `code_ref`、命令、环境和输入完全一致，且同时记录非空 `scope`、`result=passed` 与 `produced_by` 时才有效；完全相同的成功自动化证据不得重跑。任一维度变化就使对应证据失效并重新执行。验收只实际执行尚未覆盖的手工、外部环境或真实服务步骤，以及没有有效自动化证据的测试项。
+
+复用证据仍是本次验收对精确证据的真实核对；复用不是 `not_executed`。若该证据足以证明测试项预期，测试项写 `status: passed`，在“实际结果”中说明已核对的结果和绑定键，在“证据”中使用一行 `复用自动化证据：<compact-json>`。JSON 必须且只能包含字符串字段 `code_sha`、`command`、`environment_fingerprint`、`input_fingerprint`、`scope`、`result`、`produced_by`；其中 `code_sha` 必须等于当前 `code_ref` 的完整 SHA、`result` 必须是 `passed`、`produced_by` 必须是 `delivery`，同一报告不得重复四元复用键。validator 会解析并返回 `reused_automation_evidence`，版本不符、缺字段、附加字段或自由文本占位都会使报告无效。只有既未复用也未执行的项目才是 `not_executed`。实际新执行的项目继续按原证据格式记录。本规则不新增报告类型或机械状态。
 
 验收报告必须：
 
@@ -152,8 +156,8 @@ test_id: T-002
 - `test_id` 只接受 `T-001` 形式；每项必须保留同 ID 标题、原始预期结果，并提供非空实际结果、证据和唯一 canonical `status`。中文机械状态、“pass”等缩写、占位符和空壳项目无效。机械字段必须写在普通 Markdown 正文，代码块中的示例或伪字段不计入报告结构。
 - 当前测试项失败但后续测试项可独立执行时，继续执行后续测试项。
 - 当前测试项导致后续测试项无法执行时，仍保留后续测试项，标记为 `未执行` 并写明原因。
-- 记录真实观察结果；不得修改测试稿中的预期结果来匹配实际结果。
-- 每次运行新建一份报告，不覆盖旧报告，也不回填测试稿。
+- 记录本次验收真实执行或核对复用证据所得的结果；不得修改测试稿中的预期结果来匹配实际结果。
+- 每次验收核对新建一份报告，不覆盖旧报告，也不回填测试稿。
 - 总体结果为“失败”时，在同一报告中增加“失败回传”，逐项提取失败事实和脱敏日志/证据，供上游工作流判断回到 Spec、Plan、代码、测试稿或验收环境；报告本身不判断根因或返回阶段，也不另建失败文档。
 
 涉及真实远端写入、删除或其他受控操作时，先遵守项目安全边界并取得所需授权。证据中不得包含密码、Token、Cookie 或其他凭据。
@@ -351,7 +355,7 @@ status: not_executed
 | 报告覆盖 | 测试稿的每个测试项及其原始标题都出现在验收报告中 |
 | 机械绑定 | frontmatter 的 `change_id`、完整 `test_ref`、完整 `code_ref` 与本次运行逐字一致 |
 | 机械状态 | `overall_status`、每项 canonical `status` 完整且与人类可读结果一致 |
-| 真实结果 | 实际结果、状态和证据来自本次运行 |
+| 真实结果 | 实际结果、状态和证据来自本次执行或对精确复用证据的核对 |
 | 失败回传 | 失败报告逐项给出预期、实际、错误摘要和脱敏证据；不自行判断返回阶段 |
 | 运行隔离 | 每次运行新建报告，不覆盖旧报告或测试稿 |
 
@@ -377,4 +381,4 @@ status: not_executed
 | 把机械字段放进代码块或只保留 ID/状态空壳 | 在普通正文逐项写同 ID 标题、原始预期、实际、证据和 canonical 状态 |
 | 用旧测试稿的报告绑定新 `test_ref` | frontmatter 逐字复制本次实际执行的完整 `test_ref` |
 | 让验收报告猜测根因或决定回到哪个阶段 | 报告只传事实；由个人工作流入口判断路由 |
-| 重复运行时覆盖旧报告 | 每次运行生成新的验收报告文件 |
+| 重复验收时覆盖旧报告 | 每次验收核对生成新的验收报告文件 |

@@ -51,7 +51,7 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
 
     def test_plan_review_protocol_has_one_normative_source(self):
         self.assertIn("[plan-review-contract.md](references/plan-review-contract.md)", self.text)
-        self.assertIn("`plan-document-reviewer-prompt.md`", self.text)
+        self.assertIn("`lean-plan-document-reviewer-prompt.md`", self.text)
         self.assertNotIn("plan-adoption-proof:start", self.text)
         self.assertIn("`managing-change-ledger`", self.text)
         self.assertIn("`adopt-plan`", self.text)
@@ -124,9 +124,11 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         completion = self.text.index("## 完成变更事件")
         self.assertLess(writer, completion)
 
-    def test_impact_range_definition_is_not_duplicated(self):
-        self.assertIn("`writing-specs` 是“可能的影响范围”的唯一规范源", self.text)
-        self.assertNotIn("`可能修改 / 可能新增 / 需要核对`", self.text)
+    def test_code_impact_investigation_belongs_only_to_plan_after_baseline_selection(self):
+        planning = self.stage_texts["plan-stage.md"]
+        self.assertIn("选定 `base_sha` 的精确 Git tree 上执行代码影响调查", planning)
+        self.assertIn("Spec 不提供代码路径、符号或 `code_sha`", planning)
+        self.assertNotIn("## 可能的影响范围（非行为契约）", self.text)
 
     def test_execution_contract_and_finishing_are_stop_signals_not_copies(self):
         self.assertNotIn("execution_contract:", self.workflow_text)
@@ -144,20 +146,20 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         self.assertIn("reviewer", self.text)
 
     def test_superpowers_originals_are_read_only_dependencies(self):
-        self.assertIn("Superpowers 原生技能是只读依赖", self.text)
+        self.assertIn("外部技能是只读依赖", self.text)
 
     def test_requirement_discussion_waits_for_the_final_overall_solution(self):
         for required in (
             "最终总体方案（需求层）",
             "完整打印",
-            "阶段状态：等待确认",
+            "需求讨论状态：等待确认",
             "确认前保持 `current_stage=requirement_discussion`",
             "已确认的最终总体方案",
         ):
             self.assertIn(required, self.text)
 
         self.assertIn(
-            "确认后才把 `current_stage` 更新为 `register_change`",
+            "总控才按个人工作流门控把 `current_stage` 更新为 `register_change`",
             self.text,
         )
         self.assertNotIn("确认结论，随后进入 Spec；不进总账", self.text)
@@ -742,7 +744,7 @@ class WorkflowIntegrationContractTests(unittest.TestCase):
         for required in (
             "共同基线候选卡",
             "等待一次选择",
-            "相同的 `base_source`、`base_locator` 和 40 位完整 `base_sha`",
+            "相同的 `base_repository`、`base_source`、`base_locator` 和 40 位完整 `base_sha`",
             "明确选择另一个已展示稳定候选",
             "本地共同基线可以尚未推送",
             "本地来源不执行远程 fetch 或远程相等性比较",

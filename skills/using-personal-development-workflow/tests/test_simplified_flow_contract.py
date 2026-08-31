@@ -98,26 +98,53 @@ class SimplifiedFlowContractTests(unittest.TestCase):
         ):
             self.assertIn(required, self.all_text)
 
-    def test_review_uses_frozen_exact_scope_and_three_read_only_agents(self):
+    def test_full_review_reuses_sdd_final_and_batch_review_is_explicit(self):
         for required in (
-            "`review_scope: CE | batch`",
-            "`review_base: <sha>`",
-            "`review_head: <sha>`",
-            "`review_commits: [<integrated_commit>...]`",
-            "总计三个 Agent",
-            "两个测试 Agent",
-            "`reviewing-code-quality`",
+            "SDD 最终整体 review 同时满足 Full CE 级代码 review",
+            "不得追加等价代码 review",
+            "用户明确要求跨 CE 批次 review",
         ):
             self.assertIn(required, self.all_text)
 
     def test_review_range_is_derived_from_ce_or_batch_git_facts(self):
         for required in (
-            "`review_head` 必须逐字等于当前 CE 的 `code_ref` SHA",
-            "`review_base` 取该 CE 最早一个入选集成记录的 `delivery_before_sha`",
+            "`reviewed_worker_head`",
+            "`review_head` 记录受审的 Worker SHA",
+            "`code_ref` 记录 Delivery merge SHA",
+            "Worker SHA 是 merge SHA 的祖先",
+            "没有改写该 CE 的已审 diff",
+            "`review_base` 取该 CE 的 `delivery_before_sha`",
             "按 Delivery 祖先顺序排列、不得重复",
             "`review_base=freeze_base`",
             "`review_head=freeze_head`",
-            "`code_review=run` 的三 Agent 结果未汇总通过前不得进入 `acceptance`",
+            "跨 CE 批次 review",
+            "只审查跨 CE 交互",
+        ):
+            self.assertIn(required, self.all_text)
+
+    def test_full_plan_and_worker_shape_are_bounded(self):
+        for required in (
+            "所有正式 Plan 始终采用 Lean",
+            "默认 1–3 个执行 Task",
+            "一个实现 Worker",
+            "不得把测试、文档或配置拆成独立 Task",
+            "超过 3 个 Task",
+            "用户例外确认",
+        ):
+            self.assertIn(required, self.all_text)
+
+    def test_automation_evidence_has_one_execution_owner_and_exact_reuse_key(self):
+        for required in (
+            "`code_sha + command + environment_fingerprint + input_fingerprint`",
+            "同一证据只执行和记录一次",
+            "Reviewer 使用已有测试证据审查，不默认重跑",
+            "Root 只验证引用、SHA、范围和证据",
+            "Delivery 在最终候选合并版本上执行一次 CE 完整自动化验证",
+            "Acceptance 复用绑定同一 `code_ref` 的自动化证据",
+            "任一维度变化",
+            "`environment_fingerprint`",
+            "`input_fingerprint`",
+            "`produced_by`",
         ):
             self.assertIn(required, self.all_text)
 
@@ -129,7 +156,7 @@ class SimplifiedFlowContractTests(unittest.TestCase):
             "按 flow 核对当前 CE 的既有行为或短 Spec 与 diff",
             "以下 Plan、独立 review、验收 validator 和最终逻辑稿门禁只适用于 Full",
             "以下报告、validator、最终逻辑稿和六类引用信号只适用于 Full",
-            "以下 Worker、handoff、完整候选展示和代码基线信号只适用于 Full",
+            "以下 Worker、handoff 和完整候选展示信号只适用于 Full",
             "以下 Plan、SDD offer、Coordinator、独立 reviewer 和材料变更评估信号只适用于 Full",
         ):
             self.assertIn(required, self.all_text)

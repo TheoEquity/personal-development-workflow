@@ -1,4 +1,4 @@
 interface:
   display_name: "发散并拷打需求"
   short_description: "用决策包与行为校验和形成最终总体方案"
-  default_prompt: "使用 $exploring-and-grilling-requirements 查明事实，以决策包确认关键选择，生成行为校验和，并完整打印最终总体方案供我确认。"
+  default_prompt: "使用 $exploring-and-grilling-requirements 查明事实，以一个或多个问题确认关键选择，生成行为校验和，并完整展示最终讨论结果供我确认。"

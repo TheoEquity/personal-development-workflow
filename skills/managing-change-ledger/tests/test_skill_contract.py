@@ -78,8 +78,9 @@ class ManagingChangeLedgerContractTests(unittest.TestCase):
         for required in (
             "每个 `change_id` 只维护一份当前采用的正式 Plan",
             "一个 `plan_ref`",
-            "多个实现 `Task N`",
+            "默认包含 1–3 个垂直实现 `Task N`",
             "实现 Task 不是总账身份",
+            "`--user-confirmed-task-count-exception`",
             "重新规划仍写入 `plans/<change_id>.md`",
         ):
             self.assertIn(required, self.text)
