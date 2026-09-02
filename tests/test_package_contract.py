@@ -52,6 +52,7 @@ class PackageContractTests(unittest.TestCase):
             "README.md",
             "DEPENDENCIES.md",
             "examples/personal-development-workflow.json.example",
+            "config/global-skill-trigger-overrides.json",
             "scripts/install.ps1",
             "scripts/test.ps1",
         ):

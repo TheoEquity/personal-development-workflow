@@ -11,4 +11,6 @@ Codex 或其他宿主应提供 Git、Python 3 和基本文件编辑/命令执行
 - 验证：项目自身测试、构建、lint 和人工可复核证据；
 - 分支收尾：项目已有的 Git/MR/PR 流程。
 
+如果宿主已经安装 `config/global-skill-trigger-overrides.json` 中列出的七个外部 Skill，安装器会收窄它们的自动触发描述；缺少任何一个都不会阻止五个自有 Skill 的安装。
+
 项目特有的不变量放在仓库的 `AGENTS.md`、测试、CI 或 Hook 中，不复制进全局工作流 Skill。

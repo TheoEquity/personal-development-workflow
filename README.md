@@ -86,6 +86,12 @@ Plan 和测试稿可以作为 Full 的项目材料，但不是总账的固定字
 - `writing-specs`：Light/Full 行为合同；
 - `writing-test-drafts`：按需正式验收。
 
+## 全局 Skill 触发范围
+
+`config/global-skill-trigger-overrides.json` 保存七个可选外部 Skill 的轻量触发描述，覆盖 TDD、系统化调试、详细计划、代码审查、并行 Agent、Subagent 开发和计划执行。普通任务不再仅因为属于功能、Bug、多步骤或待合并状态而自动进入这些重流程；只有用户明确要求，或 Full/高风险任务满足配置中的条件时才触发。
+
+安装器只修改目标 Skill 的 `description`，不复制或接管它们的执行正文。目标 Skill 未安装时直接跳过；修改前的 `SKILL.md` 会进入 `.personal-development-workflow-backups`。因此这些覆盖是可恢复的全局集成，不是五个自有 Skill 的运行依赖。
+
 ## 权限
 
 本地读取、编辑、测试和当前 CE 范围内的本地 commit 属于正常实现动作。Push、MR/PR、部署、删除 Worktree、删除远端分支和其他外部写入仍需用户明确授权。
