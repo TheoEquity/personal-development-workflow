@@ -1,402 +1,65 @@
 ---
 name: managing-change-ledger
-description: Use when a requirement or bug must be registered, formal-material Git references change, a change ledger must be queried or completed, or a personal-workflow cursor must be created, read, advanced, bound, or closed in local SQLite.
+description: Use when a personal-workflow change or cursor must be created, queried, advanced, bound to a worktree, or completed in local SQLite.
 ---
 
-# 管理变更事件与总账
+# 管理轻量变更总账
 
-## 核心原则
+## 职责
 
-以变更事件为中心管理开发链路。一个 `in_progress` 事件包含该需求从规划、实现、内部验收到修正后的完整开发循环；内部 TDD 或内部验收失败不是新的变更事件。Markdown 与本地 Git 保存内容和全部历史；SQLite 保存每条变更当前采用的六类材料引用，以及个人工作流当前阶段的可变游标，不复制正文、不维护第二套版本历史。
+SQLite 只保存可恢复状态和必要引用，不复制 Spec、Plan、测试稿或 Git 历史。正式文档由项目仓库保存，代码事实由 Git 保存。
 
-`change.md` 严格只写两次：第一次是事件登记，第二次是事件完成。Spec、Plan、测试稿、代码和验收证据在中间阶段产生新版本时只更新 SQLite 当前引用；中间阶段不得编辑 `change.md`，中间阶段不得更新 `change_ref`。
+总账记录：
 
-只使用 `scripts/change_ledger.py` 操作数据库，不让用户手写 SQL。只提交本地 Spec Vault；除非用户明确授权，不推送远端、不操作真实 GitLab。
+- `change_id`、`flow`、`status` 和可选 `source_ce`；
+- 简短目标或完成摘要；
+- 可选 `spec_ref`、必需 `code_ref`、可选 `evidence_ref`；
+- 工作流的 `define`、`implement`、`verify`、`done` 阶段；
+- 活动 CE 的 worktree、仓库身份、Git common directory 和绑定时 HEAD。
 
-## 管理边界
+Plan 和测试稿不是总账门禁。需要时由 Full 流程生成并在 CE 文档中引用；总账不解析它们的 Markdown 结构。
 
-`change_ledger` 只关联以下六类正式材料：
+## 基本命令
 
-| 材料 | 保存位置 | 总账引用 |
-|---|---|---|
-| Spec | Spec Vault Markdown + 本地 Git | `spec_ref` |
-| 变更事件 | Spec Vault `change.md` + 本地 Git | `change_ref` |
-| Plan | Spec Vault Markdown + 本地 Git | `plan_ref` |
-| 测试稿 | Spec Vault Markdown + 本地 Git | `test_ref` |
-| 代码 | 真实代码仓库 | `code_ref` |
-| 测试证据（验收报告） | Spec Vault Markdown + 本地 Git | `evidence_ref` |
-
-Full 验收通过后还形成 `logic/<change_id>.md` 最终逻辑稿，不增加 `logic_ref`。Direct/light 不强制生成逻辑稿、Plan、正式测试稿或验收报告，也不为缺失项创建空占位材料。讨论稿不属于规划或实现输入，不写入总账。不要创建 `code.md`；代码只用真实仓库提交定位。`workflow_state` 是运行游标，不是第七类正式材料，不进入 Spec Vault Git，也不替代任何正式引用。
-
-每个 `change_id` 只维护一份当前采用的正式 Plan 和一个 `plan_ref`；该 Plan 默认包含 1–3 个垂直实现 `Task N`，每个 Task 至少有一个非测试、文档或配置的生产代码 Create/Modify 目标。实现 Task 不是总账身份，不产生独立的 `change_id`、`workflow_id` 或 `plan_ref`。超过 3 个 Task 时，Plan 必须在 `## Task 数量例外` 为每个 Task 写明具体且逐项唯一、不能合并的独立交付、依赖或风险边界，并在正式采用时取得用户例外确认；否则机械拒绝。需要重新规划时，重新规划仍写入 `plans/<change_id>.md`，提交新版本并用新的完整 Git SHA 替换当前 `plan_ref`，不创建 Task 专属 Plan 路径。
-
-引用格式与 Vault 材料角色固定为：
-
-- `spec_ref`：`specs/<change_id>.md@<full-vault-commit-sha>`
-- `change_ref`：`changes/<change_id>/change.md@<full-vault-commit-sha>`
-- `plan_ref`：`plans/<change_id>.md@<full-vault-commit-sha>`
-- `test_ref`：`tests/<change_id>.md@<full-vault-commit-sha>`
-- `evidence_ref`：`acceptance/<change_id>/<run>.md@<full-vault-commit-sha>`
-- `code_ref`：`<repository>@<full-code-commit-sha>`
-
-最终逻辑稿没有独立数据库字段；完成后其派生定位固定为 `logic/<change_id>.md@<final-change-ref-sha>`。脚本从最终 `change_ref` 解析 SHA，再读取同一 commit tree 中的 canonical 文件。
-
-SHA 必须是 Git 返回的完整、精确 commit object ID（当前常见 SHA-1 为 40 位，SHA-256 仓库为 64 位）；即使 Git 可以解析，7 位或其他缩写也不是正式引用。只有内容已经包含在所引用的 Git commit 中，且路径符合字段角色时，引用才有效：Vault 引用的 commit 必须包含该 Markdown 的对应版本；代码引用的 commit 必须包含准备验收或已经验收的测试与生产代码。未提交工作区、暂存区、笼统的“当前代码”或仍指向旧内容的 `HEAD` 都不能充当正式引用。仓库存在无关的用户改动不自动使引用失效，但必须通过只读检查确认本次变更相关文件没有遗漏在该 commit 之外；无法证明时停止更新引用。
-
-SQLite 固定包含两张用途分离的表。`change_ledger` 保留以下八个字段：
-
-| 字段 | 规则 |
-|---|---|
-| `change_id` | 主键，格式 `CE-0001` |
-| `spec_ref` | 进行中可空；light/full 完成时必填，direct 可空 |
-| `change_ref` | 始终必填；进行中固定为登记版本，完成事务中替换为最终版本 |
-| `plan_ref` | 进行中可空；只有 full 完成时必填 |
-| `test_ref` | 进行中可空；只有 full 完成时必填 |
-| `code_ref` | 进行中可空，完成时必填 |
-| `evidence_ref` | 进行中可指向最近报告；只有 full 完成时必须指向最终通过报告 |
-| `status` | 只能是 `in_progress` 或 `completed` |
-
-`workflow_state` 只保留六个字段：
-
-| 字段 | 规则 |
-|---|---|
-| `workflow_id` | 主键，格式 `WF-0001` |
-| `change_id` | 需求讨论期间可空；事件登记后绑定一条 `in_progress` 变更且不可改绑 |
-| `current_stage` | 当前可恢复阶段；允许为内部返工向前回退，不表达状态转移矩阵 |
-| `flow` | `direct`、`light` 或 `full`；同一状态机的材料门禁组合 |
-| `review_mode` | `manual` 或 `auto`；CE 完成时恢复 `manual` |
-| `state` | 只能是 `active` 或 `closed` |
-
-`current_stage` 的合法值固定为：`requirement_discussion`、`research`、`prototype`、`register_change`、`writing_spec`、`writing_plan`、`tdd_coding`、`writing_test`、`acceptance`、`completed`。`completed` 只由关闭命令写入。`writing_test` 仅为已有游标和旧回环兼容；新流程的初始测试稿在 `writing_spec` 子流程生成，编码完成后从 `tdd_coding` 直接进入 `acceptance`。
-
-不要增加需求表、材料表、revision 表、baseline 表、时间字段、分类字段或数据库内的历史版本。旧引用由本地 Git 历史找回，不在 SQLite 中另存。`code_review` 与 `loop_mode` 是当前会话临时状态，不进入总账。不要把当前对话是否已激活、等待用户确认、TDD 的 RED/GREEN 子步骤或未提交文件状态写进 `workflow_state`。
-
-## Flow 完成合同
-
-| flow | 初始路径 | 完成时必需引用 |
-|---|---|---|
-| `direct` | 绑定后直接 `tdd_coding` | `change_ref`、`code_ref` 和完成版修改与验证摘要 |
-| `light` | `writing_spec → tdd_coding` | `change_ref`、`spec_ref`、`code_ref` 和修改与验证摘要 |
-| `full` | 完整 Spec、Plan、测试稿、编码、验收 | 现有六类引用与最终逻辑稿 |
-
-三个 flow 属于同一个状态机，不新增阶段。`workflow-set-controls` 更新活动游标的 `flow` 或 `review_mode`；direct 切 light 返回 `writing_spec`，切 full 返回 `writing_spec`。`code_review` 和 `loop_mode` 不由该命令保存。
-
-## 事件边界与变更分类
-
-以下输入必须建立新的变更事件：
-
-- 新需求；
-- 来自外部用户、客户、独立测试方、生产使用或已交付功能的 Bug 反馈；
-- 已完成事件之后出现的需求变化或 Bug 反馈。
-
-当前 `in_progress` 事件的 TDD 失败、开发者自测失败和内部验收失败留在原事件中处理。保留失败验收报告及日志证据，更新原事件的当前引用，并在同一事件内回到 Spec、Plan、代码或测试稿；不为失败项或内部发现的代码问题创建新事件。
-
-需要建立事件时，分类必须明确选择以下一种，不使用“未知”“待定”或“暂时无法判断”：
-
-| 分类 | 判断标准 | Spec 处理 |
-|---|---|---|
-| `新需求` | 正常进入、尚不依附现有 Spec 的需求 | 新建或补充 Spec |
-| `实现 Bug` | 当前有效行为约定正确，实际代码没有按约定表现 | Spec 正文不改；在 `## Spec 处理` 说明中记录当前行为依据：有适用 Spec 时写其精确引用，没有适用 Spec 时记录相关 CE 或 `source_ce` |
-| `Spec 功能缺陷` | 当前功能本应覆盖该行为，但 Spec 的行为契约缺失或错误 | 修改当前 Spec，并产生新 Spec Git 版本 |
-| `关联新需求` | 新行为扩展现有 Spec 的范围，不属于原功能缺陷 | 建立关联的新需求或新 Spec，不把扩展伪装成 Bug |
-
-外部反馈即使发生时另有事件正在开发，也单独建立事件。判断依据是反馈来源，不是当前是否恰好存在 `in_progress` 行。
-
-## 工作流程
-
-### 定位配置、Spec Vault 与数据库
-
-总控或独立调用方必须从当前工作目录向上定位最近的项目配置，并把其绝对路径作为 `--config <project-config>` 显式传给每个访问项目数据的命令。找不到当前项目配置时停止，不猜测其他配置或材料仓库：
-
-```json
-{
-  "spec_vault": "<absolute-spec-vault-path>",
-  "database": "<absolute-spec-vault-path>/.local/personal-workflow.sqlite3",
-  "repositories": {
-    "<repository-name>": "<absolute-repository-root>"
-  }
-}
-```
-
-`spec_vault` 和 `database` 必须是已确认的绝对路径。`.local/` 必须加入 Spec Vault 的 `.gitignore`；SQLite 文件不得提交到 Git。`repositories` 把稳定仓库名映射为已确认的非 bare Git worktree 精确顶层（通常是主 checkout）；稳定仓库名只能使用字母、数字、点、下划线和连字符，且必须以字母或数字开头，不能把绝对路径伪装成名字。`resolve-code-ref --worktree` 与 `set-code-ref --worktree` 通过 Git common directory 将实际 linked worktree 反向匹配到唯一稳定名。配置不存在、字段为空、含占位符、路径无法确认、Vault 不是 Git 根目录、`.local/` 未被 Git 实际忽略或已经被跟踪时停止，不生成带占位符的真实配置，也不猜测另建 Vault。
-
-路径确认后，统一通过当前项目配置调用脚本：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py `
-  --config <project-config> init
-```
-
-除不读取项目数据的 `plan-adoption-contract` 外，省略 `--config` 的项目命令必须失败。直接 `--db <absolute-path>` 只保留给初始化、迁移、测试或已明确路径的维护操作，不能作为个人工作流的项目发现机制。
-
-`init` 创建 `change_ledger` 与 `workflow_state`。再次运行时保留既有行；旧数据库的 `implementation_ref` 无损迁移为 `plan_ref`，旧游标的 `writing_implementation` 迁移为 `writing_plan`，旧四字段游标迁移为 `flow=full`、`review_mode=manual`。旧的一表数据库补建工作流表。迁移拒绝历史已完成行缺少旧完整引用、终态不一致或非法 flow/stage。
-
-### 管理工作流游标
-
-用户在已激活的个人工作流中开始新需求讨论、且没有可恢复游标时，创建游标：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py --config <config-path> workflow-create
-```
-
-需求讨论完成后，把阶段更新为 `register_change`。事件创建成功后绑定一次 `change_id`，再按 flow 进入 `direct → tdd_coding` 或 `light/full → writing_spec`：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py --config <config-path> `
-  workflow-set-stage WF-0001 --stage register_change
-python <skill-directory>/scripts/change_ledger.py --config <config-path> `
-  workflow-bind-change WF-0001 CE-0001
-```
-
-`workflow-bind-change` 原子写入 `change_id` 并按当前 flow 设置初始阶段，不得留下“已绑定但仍处于事件前阶段”的中间状态。重复绑定同一事件是幂等操作；改绑其他事件失败。
-
-每个阶段只有在对应阶段 Skill 的门禁满足、正式写入或结果已经发生后才移动游标。等待确认、被阻塞或尚未执行时保持原阶段。内部验收失败时先保存失败报告并更新 `evidence_ref`，再把 `current_stage` 直接设为拥有问题的阶段；允许回退，不建立状态转移矩阵。
-
-向前进入目标阶段时按 flow 检查最低材料：direct 进入编码无需 Spec/Plan，进入 acceptance 需要 `code_ref`；light 进入编码需要通过短格式校验的 `spec_ref`，进入 acceptance 再需要 `code_ref`；full 保留原门禁：`writing_plan` 需要 `spec_ref`、`test_ref`，`tdd_coding` 需要 `spec_ref`、`plan_ref`、`test_ref`，`acceptance` 还需要 `code_ref`。
-
-每次向前进入 `writing_plan` 时，脚本还从不可变 `spec_ref` 读取 `## 既有功能与流程影响`。该章节必须是 `writing-specs` 定义的六列表格，或唯一的无直接影响结论；重复/非法 `impact_id`、未知枚举、无影响结论与表格并存，以及没有写入规范性规则的“明确改变”都拒绝推进。此门只约束新的前向动作，不把新格式塞进历史材料共用的基础结构校验。
-
-新建并绑定事件按 flow 从 `tdd_coding` 或 `writing_spec` 开始。只有 full 的普通 `workflow-set-stage` 不得进入或跳过 `tdd_coding`，其 Plan adoption 边界只能由下面的原子 `adopt-plan` 跨越；direct/light 不生成 Plan，也不调用 `adopt-plan`。
-
-不要把 Plan adoption 拆成 `set-ref` 和 `workflow-set-stage`。先从脚本读取唯一机器合同；合同 JSON 定义参数、前置条件和原子写入集合，本 Skill 不复制这些易漂移的字段定义：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py plan-adoption-contract
-```
-
-候选 Plan 已形成不可变正式引用后，独立 reviewer 前先使用同一当前项目配置执行只读 dry-run：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py --config <config-path> adopt-plan CE-0001 `
-  --workflow-id WF-0001 `
-  --plan-ref plans/CE-0001.md@<full-vault-commit-sha> `
-  --dry-run
-```
-
-dry-run 与正式采用走同一验证路径，机械检查 Lean profile 标记、Plan 标题与 Task grammar、每个 Task 的 Outcome/Files/Consumes/Produces/Implementation notes/Test goal/checkbox、占位符、Spec impact 与实现兼容性表、覆盖和 Task 映射、canonical 引用，以及 Plan 自有的代码仓库、完整基线、目标路径和适用 AGENTS，以及当前配置、事件、游标和阶段。成功返回 `status=validated` 与拟写入内容，但不修改 SQLite、`plan_ref`、`change_ref` 或 `current_stage`；失败时保持全部状态不变。省略或切换 `--config`、更换候选内容或形成新 `plan_ref` 后必须重新 dry-run，不能把旧结果跨项目或跨候选复用。
-
-dry-run 通过后才进行个人工作流定义的语义 reviewer。评审通过、主 Agent 审核且当前模式采用同一候选后，在仍处于 `writing_plan` 时一次执行正式采用：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py --config <config-path> adopt-plan CE-0001 `
-  --workflow-id WF-0001 `
-  --plan-ref plans/CE-0001.md@<full-vault-commit-sha>
-```
-
-普通 Plan 不传 Task 例外参数。4+ Task Plan 只有在 `## Task 数量例外` 对每个 Task 都有具体且逐项唯一的理由、reviewer 已核对其与实际 Task 边界相符，且用户明确确认该例外后，主 Agent才可在正式采用命令追加 `--user-confirmed-task-count-exception`。`review_mode=auto`、Worker、reviewer 或 Plan 正文中的自述都不能替代用户确认；缺确认或逐项理由时保持 `writing_plan` 且事务无写入。该 flag 是主 Agent 对当前用户消息的授权声明；第一轮不增加新的账本授权字段或材料。
-
-每次新的 `adopt-plan` 还要求候选 Plan 包含 `## 实现兼容性分析`。脚本在同一事务内读取不可变 Spec 与候选 Plan，要求全部 Spec `impact_id` 至少覆盖一次，只允许 Spec ID 或 `implementation-only` 来源；`无影响` 必须给出具体代码证据并写 `无需任务`，`需要适配` 或 `需要迁移` 必须给出处理方式并绑定候选 Plan 中真实存在、从 1 开始且无前导零、编号唯一的 `Task N`。Spec 标为 `明确改变` 的影响项至少要有一行 `需要适配` 或 `需要迁移`，不能只映射为 `无影响`；未知状态、未知 Spec ID、非法/重复 Task 编号或 `阻塞` 一律拒绝。Spec 使用无直接影响结论时，Plan 仍须给出至少一条 `implementation-only` 分析，或唯一的 ``- 无交点代码证据：<Plan base_repository>@<base_sha> | `<路径或符号>` | <具体理由>``；该基线必须由 Plan 的 `## 开发基线` 精确派生并解析到项目配置中的仓库 commit。
-
-Plan adoption 不创建或修改 `change.md`，也不更新 `change_ref`。`adopt-plan` 直接从不可变 `spec_ref` 和候选 `plan_ref` 机械验证正式结构、影响覆盖、完整 SHA、角色路径、Plan 自有代码基线、Plan 目标位置和适用 AGENTS 清单；全部通过后在一个 `BEGIN IMMEDIATE` 事务内只原子更新 `plan_ref` 和工作流的 `tdd_coding` 阶段。任何影响合同或 adoption 校验失败都保持事务无写入；对同一已采纳 Plan 的重复或并发调用幂等。
-
-当前 Lean Plan grammar 与新影响合同都不追溯阻断已经采用旧 Plan、并已进入 `tdd_coding` 或 `acceptance` 的事件；它们按采用时的基础 Plan grammar 继续原有验收和完成门，不要求补写 Lean 标记、执行边界或兼容性表。旧事件一旦回到 `writing_spec` 向前进入 Plan，或回到 `writing_plan` 重新采用 Plan，就必须满足当前合同。对已采用引用的精确幂等 `adopt-plan` 重试不重新要求历史文档补格式。
-
-查询游标或连同已绑定总账行查询：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py --config <config-path> workflow-list --state active
-python <skill-directory>/scripts/change_ledger.py --config <config-path> workflow-show WF-0001
-python <skill-directory>/scripts/change_ledger.py --config <config-path> workflow-status WF-0001
-```
-
-只有绑定的变更已经 `completed` 时才运行 `workflow-close`。它原子写入 `current_stage=completed`、`state=closed`；关闭后的游标不可修改。用户仅说“关闭个人工作流”只关闭当前对话的路由，不调用此命令。
-
-### 登记变更事件
-
-这是 `change.md` 的第一次：事件登记。该版本固定记录需求或 Bug 背景、分类与理由、影响范围、Spec 处理和用户确认结论，并使用 `status: in_progress`。用户确认并提交后，进入完成边界以前不再编辑。
-
-总控运行 `next-id` 请求下一个编号，并把返回的唯一 `change_id` 提供给全部子 Skill。脚本负责机械分配和查重；子 Skill 不得自行生成或更换材料身份：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py --config <config-path> next-id
-```
-
-根据已知事实完成分类、Spec 处理和影响范围，生成 `changes/<change_id>/change.md`。随后同一身份机械决定 `specs/<change_id>.md`、`plans/<change_id>.md`、`tests/<change_id>.md`、`acceptance/<change_id>/<run>.md` 和验收通过后使用的 `logic/<change_id>.md`。先在对话框完整展示拟落稿内容，用户确认后再保存和提交。
-
-```markdown
----
-change_id: CE-0001
-classification: 新需求
-source_ce: null
-status: in_progress
-created_at: 2026-08-17T14:30:00Z
----
-
-# CE-0001 变更事件
-
-## 现象与背景
-
-[需求或 Bug 的可验证事实]
-
-## 分类理由
-
-[为什么属于四种分类中的这一种]
-
-## Spec 处理
-
-- 处理：新建 / 修改 / 不修改
-- 说明：[具体原因]
-
-## 影响范围
-
-[受影响的功能、模块、共享资源和相邻流程]
-
-## 当前结论
-
-[当前已确定的处理结论]
-```
-
-`source_ce` 必填为 `null` 或另一条合法 `CE-0001` 形式的事件，不能指向自己。已完成 CE 之后发现的外部 Bug 写引入问题的旧 CE；没有来源写 `null`。脚本在登记时校验该字段，完成时要求它与登记版逐字一致；direct/light 的历史摘要若有来源，还必须与它一致。`flow` 只保存在 `workflow_state`，不复制进两次写入且中途不可改的 `change.md`。
-
-不要另加 `Unconfirmed Items`、`Failure and Recovery`、`Acceptance Links`、`Current Implementation Gap` 或状态转移矩阵。
-
-用户确认后保存 `change.md`，提交到本地 Spec Vault，取得 Vault Git SHA，再创建总账行：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py --config <config-path> create `
-  --change-id CE-0001 `
-  --source-ce null `
-  --change-ref changes/CE-0001/change.md@<full-vault-commit-sha>
-```
-
-登记新事件时 `spec_ref` 可以暂时为空。即使 Bug 来自已有 Spec，也不得把其他事件的 Spec 路径塞入当前事件；进入 `writing_spec` 后，由总控提供当前 `change_id`，将确认后的行为契约保存为 `specs/<change_id>.md`，再写入对应 `spec_ref`。
-
-### 维护当前材料引用
-
-每当 Spec、Plan、测试稿或验收报告产生已提交的新版本，验证 SHA 确实存在，再只更新 SQLite 中对应的当前引用。Vault 普通引用继续使用 `set-ref`；`code_ref` 只能使用后面的原子 `set-code-ref --worktree`，不得通过通用 `set-ref` 写入。`set-ref --field change_ref` 必须拒绝；`change_ref` 只能由 `create` 写入登记版本，再由 `complete --change-ref` 原子替换为最终版本。
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py --config <config-path> set-ref CE-0001 `
-  --field test_ref `
-  --value tests/CE-0001.md@<full-vault-commit-sha>
-```
-
-运行 `set-ref` 前先确认 Vault 引用资格：解析目标 SHA，确认路径由同一 `change_id` 机械生成且本次内容存在于该 commit。写 `code_ref` 前确认本次变更相关测试和生产代码均已进入实际 worktree 的当前 `HEAD`，且没有会改变受测行为的未提交相关改动。需要创建本地 commit 但尚未获得相应 Git 授权时，保持原引用和 `in_progress` 状态并停止；不得把主 checkout、旧 `HEAD`、绝对仓库路径或手工猜测的仓库名写成新代码引用。本地 commit 不授权 push、创建 MR 或合并。
-
-从实际 Git worktree 原子派生并写入正式引用：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py --config <config-path> set-code-ref CE-0001 `
-  --worktree <absolute-worktree-root>
-```
-
-命令要求输入 worktree 根目录，通过 Git common directory 与配置中的仓库映射唯一匹配，读取该 worktree 的完整 `HEAD`，并在同一 SQLite 事务中写入 `code_ref=<repository>@<full-sha>`；存在活动游标时只允许在 `tdd_coding` 阶段写入。事务提交前脚本再次读取 `HEAD`，发生变化就回滚，但这不是跨 Git 与 SQLite 的全局锁。返回值同时包含 worktree、分支或 detached、dirty 等核对上下文；这些上下文不进入正式 `code_ref`，dirty 也不能一刀切拒绝，因为它可能来自无关用户改动，调用方仍必须只读确认本次变更相关文件没有遗漏在该 commit 外。`resolve-code-ref --worktree` 仅保留为不写总账的只读预览；未配置仓库、非法稳定名、绝对路径 locator 或同一 Git common directory 的重复稳定名都必须拒绝。
-
-绑定活动工作流时，只在 `writing_spec` 更新 `spec_ref`。Light 的短 Spec 通过后可直接进入 `tdd_coding`，不需要 `test_ref`；Full 在同一阶段由 `writing-specs` 的测试稿子节点更新 `test_ref`，两者有效后才进入 `writing_plan`。活动 full 的 `plan_ref` 只能由 `adopt-plan` 原子写入；direct/light 不创建 `plan_ref`。
-
-Full 设置 `evidence_ref` 前，总账必须已有当前 `test_ref` 与 `code_ref`。脚本从对应不可变 Git blob 读取测试稿和报告，直接调用 `writing-test-drafts/scripts/acceptance_report.py` 的唯一 validator；本 Skill 和总账脚本不复制报告字段、Markdown grammar、状态推导或失败回传表。validator 无效时事务不写入；有效时 `set-ref` 的 JSON 同时返回其规范化结果，供路由器消费。
-
-Full 内部验收失败时保留失败报告，可让 `evidence_ref` 指向最近一次已经通过上述 validator 的报告，但状态保持 `in_progress`。根据规范化失败事实回到对应阶段修正；不创建新事件。修复后重新运行适用的测试稿并生成新的验收报告，不覆盖旧报告。Direct/light 的轻量验证失败同样保留原 CE，但不制造正式报告或 `evidence_ref`。
-
-### 完成变更
-
-这是 `change.md` 的第二次：事件完成。先读取活动游标的 flow；没有活动游标的旧事件按 full 处理。
-
-Full 的验收报告通过唯一 validator 后，先由 `writing-final-logic-drafts` 根据当前不可变 Spec、Plan、代码和验收事实形成 `logic/<change_id>.md`，完整展示并取得用户确认。逻辑稿必须使用精确 `# <change_id> 最终逻辑稿`、一个有具体内容的 `## 功能逻辑`，以及至多一个有具体内容的可选 `## 注意事项`；不得用一句空泛总结、代码导读或测试证据替代。
-
-Full 在逻辑稿确认后生成原完整完成版 `change.md`。Direct/light 的完成版只写当前 flow 必需的真实引用和 `## 修改与验证摘要`，包含类型、模块、问题、修改、验证以及可选来源；不创建空 Plan、测试稿、报告或逻辑稿。
-
-Full 验收报告的唯一文本和可执行合同由 `writing-test-drafts` 定义，本 Skill 不复制其字段或 grammar。Full 的 `complete` 再次调用同一个 validator，并以 `require_passed` 门检查所引用的测试稿、最终报告和当前总账期望绑定；只有其规范化结果为全部通过才继续。旧测试稿报告、空壳、无效状态和代码块伪字段均不能完成。
-
-Full 的 `complete` 继续按 `writing-specs` 与 `writing-lean-plans` 的正式结构拒绝空壳，并重新验证完整材料。Direct/light 改为按 flow 校验真实代码引用和修改与验证摘要；light 另校验短 Spec 结构。没有绑定活动工作流的旧事件按 full 处理，以保持向后兼容。
-
-对于 Full，该脚本只机械证明已提交报告、证据结构及引用绑定满足合同，不声称能从 Markdown 独立证明现实操作确已发生；实际执行义务仍由 `writing-test-drafts` 和可信 runner/controller 履行。Direct/light 则机械检查真实代码引用、短 Spec（如适用）与完成摘要，实际轻量验证仍须由可信执行者运行。
-
-最终 `change.md` frontmatter 把当前 flow 必需的引用写成总账逐字值并提交；`change_ref` 由 canonical 路径与完整 commit SHA 机械证明。对于 `in_progress` 事件，`complete` 接收最终 `change_ref`，按 flow 从候选提交校验材料，再在同一事务中同时写入最终 `change_ref` 和 `status=completed`，并关闭活动游标、恢复 `review_mode=manual`。对于 Full 且没有绑定活动工作流时，完成门重新校验 Spec 与 Plan 的实现兼容性覆盖。
-
-Full 完成前仍逐项检查：
-
-- 六个引用全部存在且格式有效；
-- 引用使用 Git 返回的完整 SHA 且精确解析为该 commit；
-- 每个 Vault 引用的目标文件版本确实包含在对应 commit 中；
-- 本次变更相关代码没有未纳入 `code_ref` 的工作区或暂存区改动；
-- 最终验收报告总体结论为“通过”，测试稿的每个关键步骤均有通过结果；
-- 验收报告通过 `writing-test-drafts` 唯一 validator 的期望绑定与 `require_passed` 校验；
-- Spec、Plan、Plan 自有代码基线、目标路径与适用 AGENTS 清单通过上述结构和绑定校验；
-- `logic/<change_id>.md` 已由用户确认，含正确身份、具体的 `## 功能逻辑` 和至多一个可选 `## 注意事项`；
-- `change.md` 已更新为同一 `change_id`、`status: completed`、与总账逐字一致的其余五类最终引用，以及唯一的 canonical 最终逻辑稿路径；
-- 最终提交 tree 同时包含完成版 `change.md` 和该逻辑稿；SQLite 继续只有既有字段；
-- 最终候选 `change_ref` 指向该提交；完成事务成功前，总账仍保持登记版本；
-- 若存在绑定该事件的活动工作流，其 `current_stage` 必须已经是 `acceptance`；没有绑定工作流的普通总账事件可直接完成。
-
-如果任一条件不满足，保持 `in_progress` 并处理对应缺口；满足后运行：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py --config <config-path> `
-  complete CE-0001 --change-ref changes/CE-0001/change.md@<full-vault-commit-sha>
-```
-
-完成行不可再改；对已完成行重复运行 `complete CE-0001` 是幂等查询，不重开门禁。已完成时若仍提供 `--change-ref`，它必须与总账已存最终值逐字一致。活动工作流必须先到 `acceptance`；`complete` 原子关闭游标，之后 `workflow-close` 是幂等查询。完成后的外部 Bug 或需求变化新建事件，并在新 `change.md` 用 `source_ce` 关联引入问题的旧 CE；旧 CE 不修改。
-
-## 查询与日志
-
-查询单条总账：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py --config <config-path> show CE-0001
-```
-
-查询全部、正在维护或已完成的事件：
-
-```powershell
-python <skill-directory>/scripts/change_ledger.py --config <config-path> list
-python <skill-directory>/scripts/change_ledger.py --config <config-path> list --status in_progress
-python <skill-directory>/scripts/change_ledger.py --config <config-path> list --status completed
-```
-
-`list` 只读返回按 `change_id` 排序的 JSON 数组。每行保留八个既有字段；调用方根据 `status` 和六类引用是否为空判断哪些事件正在维护、哪些已经完成以及当前材料缺口。`workflow-list` 返回工作流游标，`workflow-status` 一次返回游标和它绑定的总账行。阶段以 `workflow_state.current_stage` 为主，并用正式引用、失败报告和代码事实校验；两者冲突时停止，不静默改写任一方。
-
-脚本把机器可读 JSON 输出到标准输出，把普通操作日志输出到标准错误。日志时间统一使用 UTC、精确到秒：
+统一通过 `scripts/change_ledger.py` 操作，不手写 SQL：
 
 ```text
-[2026-08-17T14:30:00Z] action=set-ref change_id=CE-0001 status=in_progress
+init
+next-id
+create --flow direct|light|full --summary <text> [--source-ce <CE>]
+set-ref <CE> --field spec_ref|code_ref|evidence_ref|change_ref --value <ref>
+show <CE>
+list [--status in_progress|completed]
+complete <CE> --summary <text>
 ```
 
-## 常见错误
+工作流游标：
 
-以下验收报告、validator 和最终逻辑稿错误只适用于 Full；direct/light 只按各自轻量验证和摘要合同处理。
+```text
+workflow-create --flow direct|light|full
+workflow-bind-change <WF> <CE>
+workflow-set-stage <WF> define|implement|verify
+workflow-bind-worktree <WF> --worktree <path>
+workflow-assert-worktree <WF> --worktree <path>
+workflow-show <WF>
+workflow-list [--state active|closed]
+workflow-status <WF>
+```
 
-| 错误 | 修正 |
-|---|---|
-| 为追踪历史再建 revision/baseline 表 | 只覆盖当前引用；从本地 Git 取历史 |
-| 只看六类引用猜测精确工作阶段 | 读取 `workflow_state`，再用正式材料校验游标 |
-| 把 `workflow_state` 当第七类正式材料 | 它只保存运行游标，不进入 Git 或总账引用 |
-| 用户关闭当前对话路由时关闭持久游标 | 只在绑定事件已经完成后运行 `workflow-close` |
-| 把分类、正文、diff 或测试步骤写进 SQLite | 放回对应 Markdown |
-| 每个阶段都重写 `change.md` 并推进 `change_ref` | 中间只更新 SQLite 材料引用；事件文档只在登记和完成时写 |
-| 为 Plan adoption 追加一个中间 `change.md` | 直接调用 `adopt-plan` 校验不可变 Spec/Plan，保持登记 `change_ref` 不变 |
-| 为 Plan 内每个实现 Task 新建 Plan、游标或事件 | Task 只在同一 `plans/<change_id>.md` 内拆分；总账继续维护该事件唯一的当前 `plan_ref` |
-| 把测试、文档、配置拆成独立 Task，或静默采用 4+ Task | 合并为默认 1–3 个垂直 Task；确有例外时逐项说明边界并取得用户确认 |
-| 为当前事件的 TDD 或内部验收失败新建 Bug 事件 | 保留失败报告，在同一 `in_progress` 事件内修正并重新验收 |
-| 把外部 Bug 反馈塞回已完成事件 | 新建事件，关联反馈发生时采用的 Spec 版本 |
-| 普通代码 Bug 也频繁修改 Spec | Spec 正文不改；在事件的 `## Spec 处理` 中记录适用 Spec 精确引用，没有适用 Spec 时记录相关 CE 或 `source_ce` |
-| Spec 功能缺陷只改代码 | 同时修改当前 Spec 并更新 `spec_ref` |
-| Full：用失败或旧验收报告完成事件 | 更新为同一 `code_ref` 的最终通过报告 |
-| Full：验收通过后直接完成，或把一句总结当逻辑稿 | 先用 `writing-final-logic-drafts` 形成并确认 `logic/<change_id>.md`，再让最终提交同时包含它和完成版 `change.md` |
-| Full：为最终逻辑稿新增数据库字段或阶段 | 从最终 `change_ref` 的 SHA 派生版本；不增加 `logic_ref` 或 SQLite 阶段 |
-| 用旧 `HEAD` 引用尚未提交的新材料或代码 | 先形成包含实际内容的本地 commit，再更新引用 |
-| 因仓库存在任意脏文件就阻塞 | 只读识别本次变更相关文件；无关用户改动保持不动 |
-| Full：在相关代码仍有未提交改动时开始正式验收 | 重新验证并形成新的本地代码 commit，再用其 SHA 验收 |
-| 修改已完成总账行 | 创建新的变更事件 |
-| 把讨论稿加入规划、实现输入或总账 | 排除讨论稿，只使用确认后的正式材料 |
+## 门禁
 
-## 停止信号
+- Light/Full 从 `define` 进入 `implement` 前必须有 `spec_ref`；Direct 不需要。
+- 进入 `verify` 前必须已经绑定 Worktree 并写入真实 `code_ref`。
+- 完成前必须处于 `verify`，存在 `code_ref`，并提供非空完成摘要。
+- `complete` 原子把 CE 标为 completed，并把绑定游标写为 `done/closed`。
+- 已完成 CE 和已关闭游标不可修改。
 
-出现以下任一情况时停止当前操作，回到对应处理项修正：
+## Worktree 绑定
 
-- 正准备新增已定义的两张表之外的表、额外字段、状态或数据库内的历史版本；
-- 正准备在配置路径缺失或未确认时猜测创建 SQLite；
-- 正准备把工作流改绑到另一个事件，或在绑定事件未完成时关闭游标；
-- 正准备在登记与完成之间编辑 `change.md`，或用 `set-ref` 更新 `change_ref`；
-- 正准备在当前 flow 必需验证未通过或 `code_ref` 不一致时标记完成；
-- Full 正准备在没有最终通过报告、没有用户确认的 canonical 最终逻辑稿，或最终 `change_ref` 提交不包含该文件时标记完成；
-- 正准备改写已完成行、覆盖旧验收报告或把讨论稿作为规划、实现输入；
-- 正准备为当前 `in_progress` 事件的内部开发或验收失败创建新事件；
-- 无法证明某个引用的 Git SHA 真实存在。
-- 无法证明目标 commit 包含被引用的材料内容或实际受测代码；
-- 本次变更相关文件仍有未纳入 `code_ref` 的改动。
-## 可靠性门禁
+`workflow-bind-worktree` 从 Git 实际读取顶层、common directory 和 HEAD，并通过项目配置中的 `repositories` 映射稳定仓库名。同一个活动 Worktree 只能有一个绑定。`workflow-assert-worktree` 在写入、测试或提交前复核实际路径和仓库身份；不一致时停止。
 
-脚本命令必须使用配置中的绝对 `spec_vault` 与位于 `spec_vault/.local` 的绝对数据库；该目录必须被 Vault 的 `.gitignore` 排除。除 `init` 外的查询对不存在数据库使用只读连接，不得创建文件。正式引用必须由 Git 证明完整 commit SHA 精确相等，Vault 引用还必须证明字段角色路径和 `commit:path` 存在，`code_ref` 必须指向可定位的代码仓库。Full 的 `complete` 必须确认 final `change.md`、canonical 最终逻辑稿、测试稿与最终报告结构完整且互相绑定，总体通过、没有失败或未执行；direct/light 只执行各自 flow 的引用、轻量 Spec（如适用）和修改与验证摘要门禁。
+Worktree 绑定不等于 Push、MR、部署或删除授权，也不允许从一个路径跳到另一个 checkout。删除 Worktree 前必须先完成或明确终止工作流，并取得用户授权。
 
-所有 read-check-write 操作都在 `BEGIN IMMEDIATE` 事务中，并以当前 `in_progress`、`active` 或 NULL 条件更新且检查影响行数。`adopt-plan` 把 Plan 引用和 `tdd_coding` 阶段作为一个不可分割写入且保持登记 `change_ref` 不变；`complete` 把最终 `change_ref` 与 `status=completed` 作为一个不可分割写入。数据库 CHECK 与终态 trigger 共同保护结构：未绑定游标只能位于 `requirement_discussion` 至 `register_change`；已绑定游标只能位于正式阶段；closed/completed 只能由规定命令产生且不可再改。迁移先预检冲突、未知阶段、孤儿外键和重复 active 绑定，再在同一事务中建立 canonical shadow tables、验证行数与 `foreign_key_check` 并原子替换；任一步失败都回滚。
+## 兼容
+
+初始化旧数据库时保留既有 CE、正式引用和完成状态；旧阶段映射到四阶段。旧 Plan/Test 引用可以作为历史列继续存在，但新流程不再更新或依赖它们。

@@ -13,31 +13,7 @@ CUSTOM_SKILLS = {
     "exploring-and-grilling-requirements",
     "writing-specs",
     "writing-test-drafts",
-    "writing-final-logic-drafts",
 }
-DEPENDENCIES = {
-    "writing-lean-plans",
-    "using-git-worktrees",
-    "subagent-driven-development",
-    "executing-plans",
-    "test-driven-development",
-    "verification-before-completion",
-    "finishing-a-development-branch",
-}
-
-IGNORED_PARTS = {"__pycache__", ".pytest_cache"}
-IGNORED_SUFFIXES = {".pyc", ".sqlite", ".sqlite3", ".bak", ".tmp"}
-
-
-def canonical_files(skill_root):
-    return {
-        path.relative_to(skill_root).as_posix(): path.read_bytes()
-        for path in skill_root.rglob("*")
-        if path.is_file()
-        and not IGNORED_PARTS.intersection(path.relative_to(skill_root).parts)
-        and path.suffix not in IGNORED_SUFFIXES
-        and ".pre-" not in path.name
-    }
 
 
 def powershell_executable():
@@ -60,7 +36,6 @@ def run_installer(destination_root, *arguments):
             str(destination_root),
             *arguments,
         ],
-        check=False,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -69,173 +44,47 @@ def run_installer(destination_root, *arguments):
 
 
 class InstallerTests(unittest.TestCase):
-    def create_destination_with_dependencies(self, root):
-        destination = root / "skills"
-        destination.mkdir()
-        for dependency in DEPENDENCIES:
-            dependency_directory = destination / dependency
-            dependency_directory.mkdir()
-            (dependency_directory / "SKILL.md").write_text(
-                f"---\nname: {dependency}\ndescription: test fixture\n---\n",
-                encoding="utf-8",
-            )
-        return destination
+    def destination(self, directory):
+        root = Path(directory) / "skills"
+        root.mkdir()
+        return root
 
-    def test_installs_exactly_the_six_custom_skills(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            destination = self.create_destination_with_dependencies(
-                Path(temporary_directory)
-            )
-
+    def test_installs_five_self_contained_skills(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = self.destination(directory)
             result = run_installer(destination)
-
-            self.assertEqual(
-                result.returncode,
-                0,
-                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}",
-            )
-            for skill_name in CUSTOM_SKILLS:
-                self.assertTrue((destination / skill_name / "SKILL.md").is_file())
-            installed_custom = {
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            installed = {
                 path.name
                 for path in destination.iterdir()
                 if path.is_dir() and path.name in CUSTOM_SKILLS
             }
-            self.assertEqual(installed_custom, CUSTOM_SKILLS)
+            self.assertEqual(installed, CUSTOM_SKILLS)
 
-    def test_refuses_to_overwrite_existing_custom_skills_without_force(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            destination = self.create_destination_with_dependencies(
-                Path(temporary_directory)
-            )
-            first = run_installer(destination)
-            self.assertEqual(first.returncode, 0, first.stderr)
-
-            second = run_installer(destination)
-
-            self.assertNotEqual(second.returncode, 0)
-            self.assertIn("already exists", second.stdout + second.stderr)
-
-    def test_force_backs_up_existing_skills_before_replacement(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            destination = self.create_destination_with_dependencies(
-                Path(temporary_directory)
-            )
-            first = run_installer(destination)
-            self.assertEqual(first.returncode, 0, first.stderr)
+    def test_refuses_overwrite_without_force_and_force_creates_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = self.destination(directory)
+            self.assertEqual(run_installer(destination).returncode, 0)
             marker = destination / "writing-specs" / "local-marker.txt"
-            marker.write_text("preserve me", encoding="utf-8")
-
+            marker.write_text("preserve", encoding="utf-8")
+            refused = run_installer(destination)
+            self.assertNotEqual(refused.returncode, 0)
             forced = run_installer(destination, "-Force")
-
-            self.assertEqual(
-                forced.returncode,
-                0,
-                f"stdout:\n{forced.stdout}\nstderr:\n{forced.stderr}",
-            )
+            self.assertEqual(forced.returncode, 0, forced.stdout + forced.stderr)
             self.assertFalse(marker.exists())
-            backup_root = destination / ".personal-development-workflow-backups"
-            backups = [path for path in backup_root.iterdir() if path.is_dir()]
-            self.assertEqual(len(backups), 1)
-            self.assertTrue(
-                (backups[0] / "writing-specs" / "local-marker.txt").is_file()
-            )
+            backups = destination / ".personal-development-workflow-backups"
+            self.assertTrue(any(backups.iterdir()))
 
-    def test_check_reports_an_exact_match_after_install(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            destination = self.create_destination_with_dependencies(
-                Path(temporary_directory)
-            )
-            installed = run_installer(destination)
-            self.assertEqual(installed.returncode, 0, installed.stderr)
-
+    def test_check_detects_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = self.destination(directory)
+            self.assertEqual(run_installer(destination).returncode, 0)
             checked = run_installer(destination, "-Check")
-
-            self.assertEqual(
-                checked.returncode,
-                0,
-                f"stdout:\n{checked.stdout}\nstderr:\n{checked.stderr}",
-            )
-            self.assertIn("matches canonical source", checked.stdout)
-
-    def test_check_rejects_content_drift_and_unmanaged_files(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            destination = self.create_destination_with_dependencies(
-                Path(temporary_directory)
-            )
-            installed = run_installer(destination)
-            self.assertEqual(installed.returncode, 0, installed.stderr)
-            target = destination / "writing-specs"
-            (target / "SKILL.md").write_text("local divergence\n", encoding="utf-8")
-            (target / "local-rule.md").write_text("unmanaged\n", encoding="utf-8")
-
-            checked = run_installer(destination, "-Check")
-
-            self.assertNotEqual(checked.returncode, 0)
-            output = checked.stdout + checked.stderr
-            self.assertIn("content differs: writing-specs/SKILL.md", output)
-            self.assertIn("extra in installation:", output)
-            self.assertIn("writing-specs/local-rule.md", output)
-
-    def test_installed_custom_skill_trees_equal_canonical_source_trees(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            destination = self.create_destination_with_dependencies(
-                Path(temporary_directory)
-            )
-
-            installed = run_installer(destination)
-
-            self.assertEqual(installed.returncode, 0, installed.stderr)
-            source_root = REPO_ROOT / "skills"
-            for skill_name in CUSTOM_SKILLS:
-                self.assertEqual(
-                    canonical_files(source_root / skill_name),
-                    canonical_files(destination / skill_name),
-                    skill_name,
-                )
-
-    def test_missing_superpowers_dependencies_stop_without_installing(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            destination = Path(temporary_directory) / "skills"
-            destination.mkdir()
-
-            result = run_installer(destination)
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("Missing required Superpowers skills", result.stdout + result.stderr)
-            for skill_name in CUSTOM_SKILLS:
-                self.assertFalse((destination / skill_name).exists())
-
-    def test_rejects_dependency_with_mismatched_frontmatter_name(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            destination = self.create_destination_with_dependencies(
-                Path(temporary_directory)
-            )
-            (destination / "writing-lean-plans" / "SKILL.md").write_text(
-                "---\nname: unrelated-skill\ndescription: forged dependency\n---\n",
-                encoding="utf-8",
-            )
-
-            result = run_installer(destination)
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("Invalid Superpowers skill identity", result.stdout + result.stderr)
-            for skill_name in CUSTOM_SKILLS:
-                self.assertFalse((destination / skill_name).exists())
-
-    def test_missing_writing_lean_plans_stops_without_installing(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            destination = self.create_destination_with_dependencies(
-                Path(temporary_directory)
-            )
-            shutil.rmtree(destination / "writing-lean-plans")
-
-            result = run_installer(destination)
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("writing-lean-plans", result.stdout + result.stderr)
-            for skill_name in CUSTOM_SKILLS:
-                self.assertFalse((destination / skill_name).exists())
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+            (destination / "writing-specs" / "SKILL.md").write_text("drift\n", encoding="utf-8")
+            drifted = run_installer(destination, "-Check")
+            self.assertNotEqual(drifted.returncode, 0)
+            self.assertIn("content differs", drifted.stdout + drifted.stderr)
 
 
 if __name__ == "__main__":

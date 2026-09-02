@@ -1,6 +1,5 @@
 {
-  "spec_vault": "<absolute-project-spec-vault-path>",
-  "database": "<absolute-project-spec-vault-path>/.local/personal-workflow.sqlite3",
+  "database": "<absolute-project-root>/.local/personal-workflow.sqlite3",
   "repositories": {
     "example-repository": "<absolute-code-repository-path>"
   }

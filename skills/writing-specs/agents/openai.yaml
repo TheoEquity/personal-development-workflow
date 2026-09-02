@@ -1,4 +1,4 @@
 interface:
   display_name: "编写 Spec"
   short_description: "按 light 或 full 编写已确认需求的行为契约"
-  default_prompt: "使用 $writing-specs 按任务复杂度选择 light 或 full，为已确认需求编写对应粒度的功能 Spec。"
+  default_prompt: "使用 $writing-specs 为已确认行为编写最小充分的 light 或 full Spec；不要预写实现步骤或强制生成测试稿。"

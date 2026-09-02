@@ -17,18 +17,7 @@ $customSkills = @(
     "managing-change-ledger",
     "exploring-and-grilling-requirements",
     "writing-specs",
-    "writing-test-drafts",
-    "writing-final-logic-drafts"
-)
-
-$requiredDependencies = @(
-    "writing-lean-plans",
-    "using-git-worktrees",
-    "subagent-driven-development",
-    "executing-plans",
-    "test-driven-development",
-    "verification-before-completion",
-    "finishing-a-development-branch"
+    "writing-test-drafts"
 )
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
@@ -41,63 +30,6 @@ if ($Check -and $Force) {
 
 if (-not (Test-Path -LiteralPath $destinationFullPath -PathType Container)) {
     throw "Destination skill root does not exist: $destinationFullPath"
-}
-
-function Get-SkillFrontmatterName {
-    param(
-        [Parameter(Mandatory)]
-        [string]$SkillFile
-    )
-
-    $lines = @(Get-Content -LiteralPath $SkillFile -Encoding UTF8)
-    if ($lines.Count -lt 3 -or $lines[0].Trim() -ne "---") {
-        return $null
-    }
-
-    $declaredName = $null
-    $hasClosingDelimiter = $false
-    for ($index = 1; $index -lt $lines.Count; $index++) {
-        $line = $lines[$index].Trim()
-        if ($line -eq "---") {
-            $hasClosingDelimiter = $true
-            break
-        }
-        if ($line -match "^name:\s*([A-Za-z0-9-]+)\s*$") {
-            $declaredName = $Matches[1]
-        }
-    }
-
-    if (-not $hasClosingDelimiter) {
-        return $null
-    }
-    return $declaredName
-}
-
-$missingDependencies = @(
-    foreach ($dependency in $requiredDependencies) {
-        $skillFile = Join-Path (Join-Path $destinationFullPath $dependency) "SKILL.md"
-        if (-not (Test-Path -LiteralPath $skillFile -PathType Leaf)) {
-            $dependency
-        }
-    }
-)
-
-if ($missingDependencies.Count -gt 0) {
-    throw "Missing required Superpowers skills: $($missingDependencies -join ', ')"
-}
-
-$invalidDependencies = @(
-    foreach ($dependency in $requiredDependencies) {
-        $skillFile = Join-Path (Join-Path $destinationFullPath $dependency) "SKILL.md"
-        $declaredName = Get-SkillFrontmatterName -SkillFile $skillFile
-        if ($declaredName -ne $dependency) {
-            "$dependency declares '$declaredName'"
-        }
-    }
-)
-
-if ($invalidDependencies.Count -gt 0) {
-    throw "Invalid Superpowers skill identity: $($invalidDependencies -join ', ')"
 }
 
 function Assert-ChildPath {

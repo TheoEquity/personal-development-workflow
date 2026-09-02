@@ -10,8 +10,7 @@ $skillNames = @(
     "managing-change-ledger",
     "exploring-and-grilling-requirements",
     "writing-specs",
-    "writing-test-drafts",
-    "writing-final-logic-drafts"
+    "writing-test-drafts"
 )
 
 function Invoke-PythonCheck {
