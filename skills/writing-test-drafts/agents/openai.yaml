@@ -1,4 +1,4 @@
 interface:
-  display_name: "测试稿与验收报告"
-  short_description: "编写具名测试项，并按指定测试稿输出逐项验收报告"
-  default_prompt: "Use $writing-test-drafts to 编写测试稿，或执行指定测试稿并生成验收报告。"
+  display_name: "按需正式验收"
+  short_description: "为高风险或里程碑任务编写具名测试并绑定证据"
+  default_prompt: "使用 $writing-test-drafts 为当前高风险或里程碑任务编写正式测试稿，或执行测试稿并生成绑定实际 code_ref 的验收报告。"

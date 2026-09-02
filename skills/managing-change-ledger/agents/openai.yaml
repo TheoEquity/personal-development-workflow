@@ -1,4 +1,4 @@
 interface:
   display_name: "管理变更事件与总账"
-  short_description: "按 direct、light 或 full 维护变更总账与工作流游标"
-  default_prompt: "使用 $managing-change-ledger 按当前 flow 登记变更事件、维护必要材料引用，或查询和更新个人工作流游标。"
+  short_description: "维护 CE、四阶段游标和 Worktree 绑定"
+  default_prompt: "使用 $managing-change-ledger 登记或恢复 CE，维护必要引用，并机械核对当前工作流绑定的 Worktree。"

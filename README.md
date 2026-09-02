@@ -1,199 +1,93 @@
 # Personal Development Workflow
 
-这是一个面向 Codex 的个人开发工作流包。它把需求确认、变更登记、Spec、测试稿、Plan、TDD 实现、验收和返工串成一条可恢复、可追踪的流程。
+这是一个面向 Codex 的轻量个人开发工作流。它用同一套控制面处理小修复、普通功能和从零开发完整系统，并把过程约束集中在少数真正需要持久化或机械验证的边界上。
 
-本仓库是六个定制 Skill 的唯一规范源。安装副本只反映仓库中的规范文件；缓存、临时文件、手工规则和独立修改都不属于可发布版本。Superpowers 原生 Skill 是外部只读依赖，本仓库不复制、不修改它们。
+## 核心结构
 
-## 包含的 Skill
+任务深度使用 `direct / light / full`：
 
-- `using-personal-development-workflow`：总控、游标监督和阶段路由。
-- `managing-change-ledger`：项目级 SQLite 总账、`change_id`、材料引用和游标持久化。
-- `exploring-and-grilling-requirements`：需求讨论与确认。
-- `writing-specs`：已确认行为契约和既有功能影响。
-- `writing-test-drafts`：验收测试稿、实际验收报告和失败回传。
-- `writing-final-logic-drafts`：验收通过后的轻量最终逻辑稿。
+- `direct`：恢复已有行为或局部维护，直接实现和验证；
+- `light`：明确、低风险的行为变化，先写短 Spec；
+- `full`：架构、公共契约、数据、安全或大范围变化，使用完整 Spec，必要时增加里程碑 Plan 和正式验收。
 
-外部依赖见 [DEPENDENCIES.md](DEPENDENCIES.md)。
+执行拓扑独立选择：
 
-## 完整流程
+- **单 Worktree 串行**：默认，一个 CE 从定义到验证都在同一个 Worktree 完成；
+- **多 Worktree 并行**：只有两个以上实现流能够独立修改、独立验证时启用。
 
-```mermaid
-flowchart TD
-    A["开启个人工作流"] --> B["需求讨论与确认"]
-    B --> C["登记变更事件并取得 change_id"]
-    C --> D["创建登记版 change.md"]
-    D --> E["编写并确认 Spec"]
-    E --> F["生成或确认测试稿"]
-    F --> T["展示本地候选与远程候选"]
-    T --> G["确认基线并编写 Plan"]
-    G --> H["独立 reviewer 审查"]
-    H -->|Issues Found| G
-    H -->|Approved| I["adopt-plan 安装 plan_ref"]
-    I --> J{"是否开启 Subagent-Driven Development 进行开发？"}
-    J -->|开启| Q{"Plan base_source"}
-    J -->|不启动| J
-    Q -->|remote| R{"fetch 后仍等于 Plan base_sha？"}
-    Q -->|local| K["验证精确本地 SHA 与干净 worktree"]
-    R -->|否| G
-    R -->|是| K["从该 SHA 创建或确认隔离 worktree"]
-    K --> L["一个 Worker 内执行 1–3 个垂直 Task"]
-    L --> M["Delivery 在最终候选 SHA 完整验证并写入 code_ref"]
-    M --> N["复用自动化证据，只执行未覆盖验收"]
-    N -->|通过| O["形成并确认最终逻辑稿"]
-    O --> S["写完成版 change.md 并完成事件"]
-    N -->|失败| P["统一材料变更评估并等待确认"]
-    P -->|材料无需修改| L
-    P -->|Plan 需要修改| G
-    P -->|Spec 需要修改| E
-```
+Full 不自动等于并行，Direct/Light 也不绕过代码隔离。
 
-主线顺序是：
+## 工作流
 
 ```text
-开启工作流
-→ 需求讨论与确认
-→ 登记 change_id / 创建 change.md
-→ 编写并确认 Spec / 生成测试稿
-→ 展示并确认本地/远程 Plan 基线候选
-→ 编写、独立评审并采用 Plan
-→ 询问是否开启 SDD
-→ 按 Plan 的本地或远程来源验证精确 SHA
-→ 从该 SHA 建立一个 Worker worktree + 1–3 个垂直 Task + 本地提交
-→ Delivery 在最终候选合并 SHA 运行一次完整自动化验证并写入 code_ref
-→ 复用相同 code_ref 的自动化证据，只执行未覆盖验收并生成独立报告
-→ 形成并确认最终逻辑稿
-→ 完成 change.md / 关闭事件与游标
+选择 direct / light / full
+→ 创建或恢复 CE
+→ 创建并绑定 Worktree
+→ 必要时写 Spec 和里程碑 Plan
+→ 实现
+→ 在同一 Worktree 验证实际候选
+→ 记录完成摘要和 code_ref
 ```
 
-## 身份、材料与版本
-
-一个工作流游标绑定一个变更事件。所有正式材料共用总控提供的同一个 `change_id`：
+持久阶段只有：
 
 ```text
-changes/<change_id>/change.md
-specs/<change_id>.md
-plans/<change_id>.md
-tests/<change_id>.md
-acceptance/<change_id>/<run>.md
-logic/<change_id>.md
+define → implement → verify → done
 ```
 
-版本不靠另建文件名区分，而由 `路径@完整 Git SHA` 定位。最终逻辑稿不增加 SQLite 字段；它由最终 `change_ref` 的同一 Git commit SHA 锁定，派生定位为 `logic/<change_id>.md@<final-change-ref-sha>`。
+阶段用于跨会话恢复，不记录模型内部推理、TDD 子步骤、临时 reviewer 或聊天确认状态。
 
-一个 Plan 对应一个工作流任务和一个变更事件；所有正式 Plan 始终为 Lean，默认只含 1–3 个垂直 Task，不再用多个 Task 表达文件级微步骤。Task 共享同一份 Spec、Plan、Worker worktree、代码快照和完成边界，测试、文档和配置不单独成 Task。4+ Task 必须逐项说明不可合并边界并取得用户例外确认。
+## Worktree 防串
 
-`change.md` 只写两次：
+所有代码修改默认在 Worktree 中进行。
 
-1. 事件登记时创建，记录背景、分类、影响范围、Spec 处理和确认结论。
-2. 事件完成时更新，记录 `status: completed`、最终材料引用、`logic/<change_id>.md` 的 canonical 路径和最终结论。
+- 一个活动 CE 默认绑定一个 Worktree；
+- 一个 Worktree 同时只有一个写入者；
+- 已经位于 linked/Codex-managed Worktree 时不得嵌套创建；
+- 测试、构建、提交和 `code_ref` 必须来自绑定的同一个 Worktree；
+- Worktree 根目录、Git common directory、稳定仓库名和绑定时 HEAD 由总账脚本读取并保存；
+- 写入、测试和提交前可以用 `workflow-assert-worktree` 机械复核；
+- 多个 Agent 不得并发写入同一个 Permanent Worktree。
 
-中间阶段只更新项目级 SQLite 中的当前材料引用，不持续重写 `change.md`。
+Worktree 不隔离端口、数据库、Docker project 和仓库外目录。项目使用这些共享资源时，应按 Worktree 分配独立 namespace。ignored 但运行必需的文件使用 `.worktreeinclude` 明确复制。
 
-## 项目配置与 SQLite
+## 从零开发完整系统
 
-每个项目使用自己的 `.codex/personal-development-workflow.json` 和项目级 SQLite，不存在用户级全局配置 fallback。总控从当前目录向上查找最近的一份项目配置。
+完整系统使用一个长期目标保持整体方向，由系统级 Spec 保存架构边界和关键不变量，再拆成多个可独立验收的纵向 CE。每个 CE 交付一个可运行增量，后续从最新已验证基线继续。
 
-复制示例后，把占位符改为该项目已经确认的绝对路径：
+Plan 只覆盖当前里程碑。只有真正独立的实现流才创建 Worker Worktree；开发可以并行，集成必须串行。
 
-```powershell
-Copy-Item examples/personal-development-workflow.json.example <project-root>/.codex/personal-development-workflow.json
-```
+## Spec 和验收
 
-配置字段：
+- Direct 不写 Spec；
+- Light 使用包含问题、触发、期望行为、范围和完成条件的短 Spec；
+- Full 使用与风险相称的完整行为和架构合同；
+- 正式验收按需启用，适用于系统里程碑、迁移、安全、关键数据流程或用户明确要求逐项验收的场景；
+- 其他任务使用轻量验证清单，但验证始终必需。
 
-- `spec_vault`：保存正式变更材料并提供 Git SHA 的 Git 仓库。
-- `database`：必须位于 `spec_vault/.local/`，并被 Git 忽略。
-- `repositories`：稳定仓库名到实际非 bare Git checkout 的映射。
+TDD 是按问题选择的方法，不是统一门禁。适合稳定复现的 Bug、核心逻辑和关键状态转换时优先测试先行；无论采用什么开发方法，完成前都必须运行真实验证。
 
-真实项目配置、`.local/` 和 SQLite 不应提交到本仓库或业务仓库。
+## 总账
 
-SQLite 继续只保存既有六类材料引用和工作流游标，不增加 `logic_ref` 或新的工作流阶段。`complete` 从最终 `change_ref` 的 SHA 读取同一提交中的逻辑稿并机械验证。
+项目配置示例位于 `examples/personal-development-workflow.json.example`。SQLite 保存：
 
-## Plan 与实现门禁
+- CE 身份、flow、状态、来源和摘要；
+- 可选 Spec/证据引用与实际代码引用；
+- 四阶段游标；
+- Worktree 与仓库绑定。
 
-Spec 和测试稿就绪后，每次创建 Plan 或形成新的 `plan_ref` 都先发现候选，包括内容不变但重新提交或锚定的情况。总控枚举相关本地 worktree 的绝对路径、分支或 detached 状态、完整 HEAD 和 clean/dirty，同时只读查询目标远程分支的实际完整 SHA，再把本地候选与远程候选放在同一张卡片中等待选择；卡片明确说明：只回复“继续”将采用远程候选。用户也可以明确选择一个尚未推送的本地 commit。
+Plan 和测试稿可以作为 Full 的项目材料，但不是总账的固定字段门禁。已完成 CE 和已关闭游标不可修改。旧数据库初始化时会保留历史引用，并把旧阶段映射到四阶段。
 
-未提交修改不属于任何 SHA。dirty worktree 的 HEAD 可以作为本地候选，但 Plan 调查、评审和后续实现不得混入这些 dirty 修改；若用户要纳入，必须先另行授权形成一次精确的 `baseline-capture:<change_id>` 快照 commit，再重新展示候选。授权前用 HEAD 和排序后的 path/state/mode/content OID 清单冻结 `baseline_snapshot`，暂存前与 commit 前机械复核且禁止清单外 index 条目。该提交只是对原样既有 diff 的基线捕获，不允许编辑，不要求事后追溯制造 RED，也不构成 TDD 或实现完成证据；后续实现仍正常执行 TDD。候选在等待期间移动时，本次选择失效并重新确认。
+## Skill
 
-选择基线后才使用外部 `writing-lean-plans` 形成唯一支持的正式 Lean Plan。个人工作流不保存固定角色模型或 `high/xhigh` 表；普通阶段继承当前有效配置，SDD 按任务复杂度选择足够完成任务的最低合理档位。Plan 在选定 `base_sha` 的精确 Git tree 上调查代码影响，并记录 `base_repository`、`base_source`、可读 `base_locator` 和评审代码所用的 40 位完整 `base_sha`；远程来源还记录 `base_remote` 与 `base_branch`，本地来源另记 `base_worktree`、`base_local_branch`、`base_detached_sha`，供机械验证而不从带分隔符的 locator 字符串反向解析。Plan 经过独立 reviewer 后，由 `managing-change-ledger adopt-plan` 原子安装新的 `plan_ref`；只有采用成功后才进入 `tdd_coding`。
+- `using-personal-development-workflow`：薄总控和路由；
+- `managing-change-ledger`：CE、阶段和 Worktree 绑定；
+- `exploring-and-grilling-requirements`：按需处理实质歧义和高风险选择；
+- `writing-specs`：Light/Full 行为合同；
+- `writing-test-drafts`：按需正式验收。
 
-同一轮并行处理多个 Bug 时，候选选择提升为整轮共用的一张卡片和一次选择，而不是强制远程：第一轮目标分支头、已有开放 MR 时的 MR 实际源分支头只是远程候选；相关本地 commit 仍作为本地候选展示。整轮明确选择本地后，每个 Bug Plan 记录相同的 `base_source=local`、来源定位和完整 `base_sha`，每个独立 Worktree 都从该 SHA 创建；该 commit 可以尚未推送，也不执行远程相等性比较。只回复“继续”仍选择卡片中的唯一远程候选。
+## 权限
 
-进入编码前，总控先实例化不可变 `authorization_offer`，其中固定仓库、`plan_ref`/Plan 范围、所选基线来源与完整 SHA、来源验证权限、允许创建 worktree、本地 commit 和禁止 finishing 的边界；尚不存在的开发 worktree 不得猜测。`review_mode=manual` 完整展示后逐字询问：
+本地读取、编辑、测试和当前 CE 范围内的本地 commit 属于正常实现动作。Push、MR/PR、部署、删除 Worktree、删除远端分支和其他外部写入仍需用户明确授权。
 
-> 是否开启 Subagent-Driven Development 进行开发？
-
-`authorization_offer` 实例化后不可改写。`manual` 只有当前对话中的明确肯定才接受；`full + auto` 不再询问 SDD，但只可在当前已绑定 CE、当前精确 `plan_ref` 和一个实现 Worker 范围内自动推进到最终验收确认门。两者都不授权合入 Delivery、远端动作或清理。远程来源会先 fetch Plan 指定分支；fetch 只更新本地 remote-tracking ref，不会对远程写入，也不会 pull、merge 或 reset 主 checkout。本地来源不执行远程 fetch 或相等性比较，只验证所选 commit 存在，并使用 HEAD 精确等于 `base_sha` 的干净隔离 worktree。
-
-实现和验收共用证据键 `code_sha + command + environment_fingerprint + input_fingerprint`。Task Implementer 负责 TDD/聚焦测试，Reviewer 消费已有证据，SDD 最终整体 review 同时满足 Full CE review；Implementation handoff 机械绑定 Worker HEAD、结构化成功证据和报告摘要。Delivery 是最终候选完整自动化验证的唯一执行者，Acceptance 只执行未覆盖的手工、外部环境或真实服务步骤。任一维度变化时证据失效并重验。
-
-远程来源 fetch 后必须解析最新完整 SHA。它与 Plan `base_sha` 一致时，才从该 SHA 创建或确认 worktree；不一致时立即关闭代码门，重新执行材料变更评估和基线选择。任何来源的验证失败或材料重新采用前，都不得创建开发 worktree、写 RED/测试/代码或创建本地 commit。创建成功后才从已接受 offer 机械派生最终 `execution_contract`，唯一新增值是工具实际返回并验证的 worktree/branch；仓库、Plan 范围和其他权限字段必须逐项相等，禁止扩权。该授权始终不包含 push、PR、merge、清理或 branch finishing。
-
-## 统一材料变更评估与返工
-
-内部验收失败、后续新增或纠正需求、已完成事件的跟进、代码调查或 reviewer 发现，以及基线漂移，只要可能修改 Spec、Plan、代码或工作流阶段，都先执行统一材料变更评估。已完成事件和旧引用保持不可变；后续变化需要新事件时也先对相关旧 Spec 与 Plan 分别评估继承、保持或改变关系。
-
-评估分别给出 Spec 和 Plan 的“无需修改、局部修改、结构性修改”结论、依据、精确位置、预期动作和明确保留项。粒度按语义影响决定：局部问题尽量局部修改；局部补丁不足以维持一致性时，结构性修改是正常结果。每一次评估都必须展示并等待用户明确同意两份结论，包括两份材料都无需修改的情况；裸“继续”、预授权或“你自己决定”不构成确认。确认前不改正式材料、代码或阶段。
-
-验收失败还会保留原失败报告并停留在同一个 `in_progress` 事件。等待用户确认本轮评估后，责任阶段按最早拥有问题的位置决定：
-
-责任阶段按最早拥有问题的位置决定：
-
-- Spec 与 Plan 都无需修改：回到 TDD 做最小修复。
-- 只有 Plan 需要修改：回到 Plan，定点修改、重新 review 和采用。
-- Spec 需要修改：先回到 Spec，确认行为后再审查受影响的 Plan。
-
-硬规则是先改正式材料，再改代码。只要 Spec 或 Plan 需要修改，代码门立即关闭：不继续修改生产代码或测试代码、不启动实现编排器、不创建代码 commit、不更新 `code_ref`。已经存在的代码 diff 冻结但不自动删除；新 Plan 采用后再按新材料和实际 worktree diff 复核，并重新取得 TDD/授权门禁。
-
-这是一条由总控、执行代理和总账引用共同执行的工作流合同，不是操作系统级 Git hook。总账会阻止错误阶段写入 `code_ref`，但无法阻止用户绕开工作流直接运行原生 `git commit`；遵守本流程时不得用手工 Git 命令规避材料门禁。
-
-## 验收通过后的最终逻辑稿
-
-验收报告由唯一 validator 判定全部通过后，总控先调用 `writing-final-logic-drafts`，根据当前不可变 Spec、已评审 Plan、最终代码和验收事实形成 `logic/<change_id>.md`。候选稿必须完整展示并取得用户确认；等待确认期间仍停在 `acceptance`，不修改数据库阶段，也不完成事件。
-
-逻辑稿的正常粒度是：先讲核心机制，再按真实顺序讲用户触发、系统处理、页面或状态结果，以及理解流程所需的关键顺序、层级、重复触发或清理行为。文档使用必填的 `## 功能逻辑` 和可选的 `## 注意事项`；不写函数、文件清单、逐项测试证据，也不强制拆成多个固定栏目。
-
-完成时，最终 `change.md` 的 `## 最终逻辑稿` 章节只记录 `- logic/<change_id>.md`。最终 `change_ref` 指向的同一 commit tree 必须同时包含这两份文件；缺失、空壳、身份错误或路径不一致时，`complete` 保持事件为 `in_progress`。
-
-## 安装
-
-先确保 [DEPENDENCIES.md](DEPENDENCIES.md) 中的外部 Superpowers Skill 已安装，然后在仓库根目录运行：
-
-```powershell
-pwsh -NoProfile -File scripts/install.ps1
-```
-
-默认目标是当前用户的 `.codex/skills`。指定其他 Skill 根目录：
-
-```powershell
-pwsh -NoProfile -File scripts/install.ps1 -DestinationRoot '<absolute-skill-root>'
-```
-
-目标中已有任一定制 Skill 时，安装器默认拒绝覆盖。确认需要替换时显式使用 `-Force`；旧目录会先备份到目标根的 `.personal-development-workflow-backups/<UTC timestamp>/`。
-
-只读检查安装副本是否与仓库规范文件逐字节一致：
-
-```powershell
-pwsh -NoProfile -File scripts/install.ps1 -Check
-```
-
-发现缺失、内容差异、缓存、备份或其他额外文件时，检查列出差异并失败，不会静默选择任一版本。
-
-安装器不会创建项目配置、数据库、变更材料或远端资源。
-
-## 测试
-
-在仓库根目录运行：
-
-```powershell
-pwsh -NoProfile -File scripts/test.ps1
-```
-
-测试覆盖包边界、安装安全与源码/安装一致性、六个 Skill 的合同与脚本、Python 编译，以及发布副本的路径可移植性。
-
-## 安全边界
-
-- 不提交真实项目配置、SQLite、`.local`、凭据或本机绝对路径。
-- 不把 Superpowers 原生 Skill 源码复制进本仓库。
-- 不由安装器修改既有 Skill，除非用户显式使用 `-Force`。
-- 工作流中的本地 commit 授权不自动扩大为 GitHub/GitLab 远端操作授权。
+安装、测试和可选外部能力见 [DEPENDENCIES.md](DEPENDENCIES.md)。

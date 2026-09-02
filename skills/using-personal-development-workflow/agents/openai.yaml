@@ -1,4 +1,4 @@
 interface:
   display_name: "使用个人开发工作流"
-  short_description: "开启、监控、继续和关闭个人开发工作流，并路由到正确阶段"
-  default_prompt: "使用 $using-personal-development-workflow 开启或继续我的个人开发工作流，并告诉我当前阶段和下一步。"
+  short_description: "用四阶段流程处理小修改到完整系统，并绑定安全 Worktree"
+  default_prompt: "使用 $using-personal-development-workflow 开启或继续工作流，判断任务深度与执行拓扑，恢复 CE 和 Worktree 后推进到下一项真实工作。"
